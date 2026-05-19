@@ -1544,6 +1544,7 @@ async function init(password){
     initClassFilter();
     preloadAdmissions(); // 백그라운드에서 합불 JSON 프리로드
     initMobileUI();      // 모바일 UI 초기화
+    setTimeout(() => { preloadAllCutoffs(); }, 800); // ★ 전 학생 cutoff 백그라운드 프리로드(딜레이 제거)
   }catch(e){
     document.getElementById('status').textContent = '오류: '+e.message;
   }
@@ -6405,13 +6406,124 @@ function renderMock(el){
   //   - 본 박스는 suneung_min 99개 대학 확장 완료 후, _suneungForCard 조인 로직 재활용해
   //     '내 모의고사로 수능최저 충족 여부' 전용으로 재구축 예정
   //   ※ 위쪽 matchedUnivs / matchedTop / debugInfo 계산은 재구축 시 재활용 위해 그대로 유지
-  let matchedUnivHtml = '<div style="margin-top:14px;padding:16px 18px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;">'
-    + '<div style="font-size:13px;font-weight:700;color:#475569;margin-bottom:6px;">🛠 수능최저 충족 현황 — 준비 중</div>'
-    + '<div style="font-size:12px;line-height:1.7;">'
-    + '정확한 수능최저 데이터(suneung_min) 정비가 진행 중입니다.<br>'
-    + '희망전공별 합격 가능성·입결·수능최저 현황은 <b style="color:#1e40af;">[내신] 탭의 「희망전공 합불 현황」</b>에서 확인하세요.'
-    + '</div>'
-    + '</div>';
+  // ★ 2026-05-19: suneung_min + 전역 _suneungForCard 로 '수능최저 충족 현황' 재구축
+  //   - 학생 희망전공/진로 → suneung_min 매칭 → 내 모의등급으로 충족 판정
+  //   - 내신 탭과 동일한 검증된 로직(_suneungForCard) 재사용 → 정확
+  let matchedUnivHtml;
+  (function(){
+    const _mg = _getStudentMockGrades(String(currentStu?.hak||''));
+    if(!stuMajor && !stuCareer){
+      matchedUnivHtml = '<div style="margin-top:14px;padding:16px 18px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;font-size:13px;">'
+        + '희망 전공·진로 정보가 없어 수능최저 충족 현황을 표시할 수 없습니다.</div>';
+      return;
+    }
+    if(!_mg){
+      matchedUnivHtml = '<div style="margin-top:14px;padding:16px 18px;background:#fffbeb;border:1px solid #fde68a;border-radius:12px;color:#92400e;font-size:13px;">'
+        + '모의고사 등급 데이터가 없어 충족 판정을 할 수 없습니다.</div>';
+      return;
+    }
+    // suneung_min 에서 학생 희망전공에 매칭되는 (대학, 단과대학, 전형) 후보 추출
+    const _smNorm = s => String(s||'').trim().toLowerCase().replace(/\s/g,'').replace(/[()（）]/g,'')
+      .replace(/(학과|학부|전공|학전공|계열)$/,'');
+    const mjN = _smNorm(stuMajor), crN = _smNorm(stuCareer);
+    // 학생 계열(인문/자연) 판별 — 포괄규칙은 같은 계열일 때만 인정
+    const _track = (function(){
+      const t=(stuMajor+' '+stuCareer).toLowerCase();
+      const nat=['공학','이공','과학','수학','물리','화학','생물','지구','컴퓨터','의예','의학','약학','한의','치의','수의','간호','식품','건축','전자','전기','기계','바이오','반도체'];
+      const hum=['인문','사회','경영','경제','회계','법','정치','국어','영어','국제','심리','복지','문','어','교육','광고','언론','관광','경찰','행정'];
+      const isN=nat.some(k=>t.includes(k)), isH=hum.some(k=>t.includes(k));
+      if(isN&&!isH) return '자연'; if(isH&&!isN) return '인문'; return '?';
+    })();
+    const deptMatch = (danRaw) => {
+      const dn = _smNorm(danRaw);
+      if(!dn) return false;
+      const flat = String(danRaw||'').replace(/\s/g,'');
+      // 학과 직접 매칭 (전공/진로 키워드가 단과대학명에 포함)
+      if(mjN.length>=2 && (dn.includes(mjN)||mjN.includes(dn))) return true;
+      if(crN.length>=2 && (dn.includes(crN)||crN.includes(dn))) return true;
+      // 포괄 규칙(전체/인문·자연계열): 학생 계열과 일치할 때만 (남용 방지)
+      const isCatchAll = /전체|전모집단위|인문계?[·,]?자연|인문[·,]자연|인문계열|자연계열/.test(flat);
+      if(isCatchAll){
+        if(_track==='자연' && /자연|전체|전모집단위/.test(flat)) return true;
+        if(_track==='인문' && /인문|전체|전모집단위/.test(flat)) return true;
+        return false; // 계열 불명이면 포괄은 제외(정확도 우선)
+      }
+      return false;
+    };
+    // 대학+학과(단과대) 단위로 대표 1개만 (전형 여러개·중복행 정리)
+    //  - 직접매칭(전공/진로 키워드가 단과대학명에 포함) = 우선 표시
+    //  - 포괄매칭(전체/계열) = 보조 (직접매칭과 구분, 뒤로)
+    const bestByKey = {};
+    (suneungMin||[]).forEach(r=>{
+      const danRaw = r['단과대학']||'';
+      if(!deptMatch(danRaw)) return;
+      const u = r['대학']||'';
+      const jh = r['전형명']||'';
+      const dn = _smNorm(danRaw);
+      // 직접매칭 여부 판정 (전공/진로 키워드가 학과명에 실제 포함)
+      const isDirect = (mjN.length>=2 && (dn.includes(mjN)||mjN.includes(dn)))
+                    || (crN.length>=2 && (dn.includes(crN)||crN.includes(dn)));
+      const sn = _suneungForCard(u, danRaw || stuMajor, jh, _mg);
+      if(sn==null) return;
+      const key = _smNorm(u)+'|'+dn;
+      const prev = bestByKey[key];
+      const score = c => c.none?1 : (c.judged ? (c.pass?4:3) : 2);
+      if(!prev || score(sn) > score(prev.sn))
+        bestByKey[key] = { univ:u, dan:danRaw, jh, sn, direct:isDirect };
+    });
+    let cands = Object.values(bestByKey);
+    // 직접매칭이 하나라도 있으면 포괄(비직접)은 숨김 → 노이즈 제거
+    const directOnes = cands.filter(c=>c.direct);
+    if(directOnes.length >= 1) cands = directOnes;
+    // 그래도 너무 많으면 최저있는 것 우선 + 대학명 정렬로 상위 60개
+    if(!cands.length){
+      matchedUnivHtml = '<div style="margin-top:14px;padding:16px 18px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;font-size:13px;">'
+        + '희망 전공에 매칭되는 수능최저 데이터(suneung_min)가 없습니다.<br>'
+        + '<span style="font-size:11px;color:#94a3b8;">현재 suneung_min에 정비된 대학(약 58개) 중 매칭되는 곳이 없을 수 있습니다.</span></div>';
+      return;
+    }
+    // 정렬: 충족 > 미달 > 최저없음/판정불가, 그 안에서 대학명
+    const rank = c => c.sn.none ? 3 : (c.sn.judged ? (c.sn.pass?0:1) : 2);
+    cands.sort((a,b)=> rank(a)-rank(b) || a.univ.localeCompare(b.univ));
+    const okN  = cands.filter(c=>!c.sn.none && c.sn.judged && c.sn.pass).length;
+    const noN  = cands.filter(c=>!c.sn.none && c.sn.judged && !c.sn.pass).length;
+
+    const rowsHtml = cands.map(c=>{
+      let badge, bg;
+      if(c.sn.none){ badge='수능최저 없음'; bg='background:#eef2f7;color:#64748b;'; }
+      else if(c.sn.judged && c.sn.pass){ badge='✓ 충족 예상'; bg='background:#d1fae5;color:#065f46;'; }
+      else if(c.sn.judged && !c.sn.pass){ badge='⚠ 미달 위험'; bg='background:#fee2e2;color:#991b1b;'; }
+      else { badge='확인 필요'; bg='background:#fef3c7;color:#92400e;'; }
+      const lbl = c.sn.none ? '' : `<span style="font-size:11px;color:#64748b;margin-left:6px;">${c.sn.label||''}</span>`;
+      const det = (c.sn.detail) ? `<div style="font-size:10px;color:#94a3b8;margin-top:2px;">${c.sn.detail}</div>` : '';
+      return `<tr style="border-bottom:1px solid #f1f5f9;">
+        <td style="padding:7px 8px;font-weight:600;color:#1e293b;font-size:12px;">${c.univ}</td>
+        <td style="padding:7px 8px;color:#475569;font-size:12px;">${c.dan||'-'}${c.jh?`<span style="color:#94a3b8;font-size:11px;"> · ${c.jh}</span>`:''}</td>
+        <td style="padding:7px 8px;text-align:center;">
+          <span style="display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;${bg}">${badge}</span>${lbl}${det}
+        </td></tr>`;
+    }).join('');
+
+    matchedUnivHtml = `<div style="margin-top:14px;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+      <div style="padding:12px 16px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+        <div style="font-size:13px;font-weight:700;color:#1e293b;">🎯 수능최저 충족 현황 <span style="font-size:11px;color:#64748b;font-weight:500;">— 내 모의고사 기준 · 희망전공 매칭</span></div>
+        <div style="font-size:11px;color:#64748b;margin-top:4px;">충족 ${okN}곳 · 미달위험 ${noN}곳 · 전체 ${cands.length}곳 (suneung_min 정비 대학 기준)</div>
+      </div>
+      <div style="max-height:340px;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="background:#fafbfc;position:sticky;top:0;">
+            <th style="padding:8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;">대학</th>
+            <th style="padding:8px;text-align:left;font-size:11px;color:#64748b;font-weight:700;">단과대/전형</th>
+            <th style="padding:8px;text-align:center;font-size:11px;color:#64748b;font-weight:700;">충족 여부</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      <div style="padding:8px 16px;background:#fafbfc;border-top:1px solid #e2e8f0;font-size:10px;color:#94a3b8;">
+        ※ 과목별 가장 최근 유효 모의등급으로 판정. 실제 수능 결과와 다를 수 있어 참고용입니다.
+      </div>
+    </div>`;
+  })();
 
   // ========== 최종 HTML ==========
   el.innerHTML = `
@@ -7695,42 +7807,249 @@ let _admShowOurSchoolOnly = false;
 let _suneungRange = 1.5; // 수능최저 매칭 내신 범위 (±등급)
 let _cutoffDBReady = false; // cutoffDB 로드 완료 여부
 
-// ★ 2026-05-18: cutoff_db 학생 진로 기반 부분 로딩 캐시
-//   - getCutoffAll(약 6MB) 일괄 로딩 대신, 학생별로 서버에서 좁혀 받은 행만 보관
-//   - { hak: 학번, rows: [...], loading: bool } 형태
+// ★ 2026-05-19: cutoff 다중 학생 캐시 + 백그라운드 일괄 프리로드
+//   - 문제: 학생 클릭마다 getCutoffByMajor 서버 왕복(약 5초)
+//   - 해결: (1) 한번 받은 학생은 cutoffCache[hak]에 영구 보관 → 재방문 즉시
+//           (2) 로그인 직후 백그라운드로 전 학생 cutoff를 순차 프리로드
+//   - cutoffByStu = 현재 보고 있는 학생 포인터(기존 코드 호환용)
+let cutoffCache = {};                       // { hak: {rows:[...], loading:bool} }
 let cutoffByStu = { hak: null, rows: [], loading: false };
+let _cutoffPreloadDone = false;
 
-// 학생 진로/전공 기반 cutoff 비동기 로드 → 도착 시 내신탭 합불섹션 자동 갱신
-async function loadCutoffForStudent(stu) {
+function _syncCutoffPtr(hak) {
+  const c = cutoffCache[hak];
+  if (c) cutoffByStu = { hak, rows: c.rows || [], loading: !!c.loading };
+  else   cutoffByStu = { hak, rows: [], loading: false };
+}
+
+// 학생 1명 cutoff 로드 (캐시 우선). force=false면 캐시 있으면 즉시 반환
+async function loadCutoffForStudent(stu, opts) {
   if (!stu) return;
+  opts = opts || {};
   const hak = String(stu.hak || stu.학번 || '');
   const major  = stu.전공 || stu.major || '';
   const career = stu.진로 || stu.career || '';
-  if (!hak || (!major && !career)) return;
-  // 이미 이 학생 것을 로드했거나 로딩 중이면 스킵
-  if (cutoffByStu.hak === hak && (cutoffByStu.rows.length || cutoffByStu.loading)) return;
+  if (!hak) return;
 
-  cutoffByStu = { hak, rows: [], loading: true };
+  // 캐시 히트 → 즉시 포인터 동기화하고 끝 (서버 왕복 없음)
+  const cached = cutoffCache[hak];
+  if (cached && (cached.rows.length || cached.done)) {
+    _syncCutoffPtr(hak);
+    return;
+  }
+  if (!major && !career) { cutoffCache[hak] = { rows: [], loading: false, done: true }; _syncCutoffPtr(hak); return; }
+  if (cached && cached.loading) { _syncCutoffPtr(hak); return; } // 이미 로딩 중
+
+  cutoffCache[hak] = { rows: [], loading: true, done: false };
+  _syncCutoffPtr(hak);
   try {
     const res = await apiGet({
       action: 'getCutoffByMajor',
       major, career,
       password: currentPassword
     }, 15000);
-    // 학생이 그 사이 바뀌지 않았을 때만 반영
-    if (cutoffByStu.hak === hak) {
-      cutoffByStu = { hak, rows: Array.isArray(res) ? res : [], loading: false };
-      // 내신 탭이 열려 있고 같은 학생이면 합불 섹션 다시 그림
-      if (currentTab === '내신' && currentStu &&
-          String(currentStu.hak || currentStu.학번 || '') === hak) {
+    cutoffCache[hak] = { rows: Array.isArray(res) ? res : [], loading: false, done: true };
+    // 현재 보고 있는 학생이면 포인터 갱신 + 내신탭 자동 다시 그림
+    if (currentStu && String(currentStu.hak || currentStu.학번 || '') === hak) {
+      _syncCutoffPtr(hak);
+      if (currentTab === '내신') {
         const admDiv = document.getElementById('admissionsSection');
         if (admDiv) admDiv.innerHTML = renderMajorAdmissions();
       }
     }
   } catch (e) {
-    if (cutoffByStu.hak === hak) cutoffByStu.loading = false;
-    console.warn('[cutoffByStu] 로드 실패:', e.message || e);
+    cutoffCache[hak] = { rows: [], loading: false, done: false };
+    if (currentStu && String(currentStu.hak || currentStu.학번 || '') === hak) _syncCutoffPtr(hak);
+    console.warn('[cutoffCache] 로드 실패:', hak, e.message || e);
   }
+}
+
+// 로그인 직후 백그라운드로 전 학생 cutoff 순차 프리로드
+//   - 한 번에 하나씩(서버 부담↓), 진로/전공 없는 학생은 건너뜀
+//   - 사용자가 학생을 직접 클릭하면 그 학생이 우선(loadCutoffForStudent가 먼저 처리)
+async function preloadAllCutoffs() {
+  if (_cutoffPreloadDone) return;
+  _cutoffPreloadDone = true;
+  const list = (students || []).filter(s => (s.전공 || s.major || s.진로 || s.career));
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    const hak = String(s.hak || s.학번 || '');
+    if (!hak || cutoffCache[hak]) continue;          // 이미 있으면 skip
+    try { await loadCutoffForStudent(s); } catch (e) {}
+    await new Promise(r => setTimeout(r, 120));        // 서버 여유
+  }
+  console.log('[cutoff] 전 학생 프리로드 완료:', Object.keys(cutoffCache).length);
+}
+
+// ════════════════════════════════════════════════════════════
+// ★ 2026-05-19: 수능최저 핵심 로직 전역화
+//   내신 탭(renderMajorAdmissions)과 모의고사 탭(renderMock) 양쪽에서
+//   동일한 검증된 _suneungForCard 를 재사용하기 위해 전역으로 끌어올림.
+//   _mockG(학생 모의등급)는 인자로 받음. suneung_min + _evalSuneungRule 사용.
+// ════════════════════════════════════════════════════════════
+//   접미(학과/학부/전공/계열) 제거 후 2글자 미만이면 원형 유지
+const _snNorm = s=>{
+  let x=String(s||'').trim().toLowerCase().replace(/\s/g,'').replace(/[()（）]/g,'');
+  const st=x.replace(/(학과|학부|전공|학전공|계열)$/,'');
+  return st.length>=2 ? st : x;
+};
+// 대학명 전용 정규화: "서울대학교"="서울대"="서울대학" 통일
+// ★ 2026-05-18 수정: 캠퍼스 괄호(글로컬/서울/ERICA/WISE 등)를 분리해서
+//   본체 접미어(대학교/대학/대)를 먼저 정리한 뒤 캠퍼스를 다시 붙임.
+//   기존 버그: 괄호를 먼저 떼어 "건국대학교글로컬"이 되면 끝이 '글로컬'이라
+//   /대학교$/ 가 안 걸려, "건국대(글로컬)"="건국대글로컬" 과 불일치 → 매칭 실패.
+const _uniKey = s=>{
+  let raw=String(s||'').trim().toLowerCase().replace(/\s/g,'');
+  // 괄호 안 캠퍼스명 추출 (예: 글로컬, 서울, erica, wise, 성의, 메디컬 …)
+  let campus='';
+  const m=raw.match(/[(（]([^)）]*)[)）]/);
+  if(m) campus=m[1];
+  let body=raw.replace(/[(（][^)）]*[)）]/g,''); // 괄호 통째 제거 → 순수 본체
+  body=body.replace(/대학교$/,'').replace(/대학$/,'').replace(/대$/,'');
+  return campus ? (body+'@'+campus) : body;
+};
+function _suneungForCard(univ, dept, jeonhyeong, _mockG){
+  if(!suneungMin || !suneungMin.length) return null;
+  const uN=_snNorm(univ), dN=_snNorm(dept);
+  const uKey=_uniKey(univ);
+  // 본체/캠퍼스 분리 ("건국대@글로컬" → body="건국대", campus="글로컬")
+  const _split = k => { const i=String(k||'').indexOf('@'); return i<0 ? {b:String(k||''),c:''} : {b:k.slice(0,i),c:k.slice(i+1)}; };
+  const us=_split(uKey);
+  const _univMatch = (rUniRaw) => {
+    const rs=_split(_uniKey(rUniRaw));
+    if(!us.b || !rs.b) return false;
+    // 본체 매칭 (동일 또는 3글자 이상 부분포함)
+    let bodyOk = us.b===rs.b;
+    if(!bodyOk){
+      const sh = us.b.length<=rs.b.length ? us.b : rs.b;
+      const lo = us.b.length<=rs.b.length ? rs.b : us.b;
+      bodyOk = sh.length>=3 && lo.includes(sh);
+    }
+    if(!bodyOk) return false;
+    // 캠퍼스: 양쪽 다 있으면 반드시 일치 / 한쪽이라도 비면 통과(유연)
+    if(us.c && rs.c) return us.c===rs.c || us.c.includes(rs.c) || rs.c.includes(us.c);
+    return true;
+  };
+  const rows = suneungMin.filter(r=> _univMatch(r['대학']));
+  if(!rows.length) return null;
+  const tg = /종합/.test(jeonhyeong)?'종합' : /교과/.test(jeonhyeong)?'교과' : /논술/.test(jeonhyeong)?'논술' : '';
+  // ★ 2026-05-18: 전형명 키워드 매칭 추가
+  //   - 기존 버그: 전형군(종합/교과/논술)만으로 매칭 → 같은 '종합'이라도
+  //     바람개비/의약학/기회균형 구분 못 함. 동점 시 첫 행(의약학 등 빡센 최저)을
+  //     엉뚱한 학과(바람개비 등)에 잘못 붙여 "4개 합 3 · 미달"처럼 오표시.
+  //   - 해결: 카드 전형명과 suneung_min 전형명의 핵심 키워드가 겹치면 큰 가산점(+6).
+  //           매칭 실패 동점 시 '최저 없는 행' 우선(잘못된 미달 표시보다 안전).
+  const jhN = _snNorm(jeonhyeong);
+  // suneung_min 전형명에서 비교용 핵심 키워드 추출 (괄호·'학생부'·'전형' 등 제거)
+  const _jhKeywords = nm => {
+    let s = _snNorm(nm);
+    s = s.replace(/학생부종합|학생부교과|학생부|전형|일반|[()（）ⅰⅱⅲ\d]/g,'');
+    // 2글자 이상 의미 토큰만 (예: 바람개비, 의약학, 지역균형, 기회균형, 추천, 활동우수)
+    return s.length>=2 ? s : '';
+  };
+  const scored = rows.map(r=>{
+    let sc=0;
+    const rg=String(r['전형군']||'');
+    if(tg && rg===tg) sc+=4; else if(rg==='전체') sc+=1;
+    if(/일반/.test(r['전형명']||'')) sc+=1;
+    // 전형명 핵심 키워드가 카드 전형 문자열에 포함되면 가산점
+    const kw=_jhKeywords(r['전형명']||'');
+    if(kw && jhN.includes(kw)) sc+=6;
+    // ★ 2026-05-18: 단과대학 학과 적용범위 판정 (B방식 — 학과 정확일치 최우선)
+    //   원칙: 카드 학과가 단과대학과 '정확히' 일치하면(의학과=의학과)
+    //   그게 포괄("전체")보다 무조건 우선. 전형명 매칭 실패해도 학과일치가 이김.
+    //   유형: ①전용("의예과","약학과") ②포괄("전체","전체(의예 제외)","인문·자연계열")
+    //         ③단과대세분("사범대학 수학교육과")
+    const danRaw = String(r['단과대학']||'').trim();
+    const danFlat = danRaw.replace(/\s/g,'');
+    const danN = _snNorm(danRaw);
+    const isCatchAll = /전체|외전체|그외|이외|나머지/.test(danFlat)
+      || /^인문계?[·,]?자연계?/.test(danFlat)
+      || /^인문[·,]자연/.test(danFlat)
+      || danFlat==='인문계열' || danFlat==='자연계열'
+      || danFlat==='인문·자연계열' || danFlat==='인문계열·자연계열';
+    let excluded = [];
+    const exM = danRaw.match(/[(（]([^)）]*?)(제외)[)）]/);
+    if(exM){
+      excluded = exM[1].split(/[·,및\/、\s]+/).map(s=>_snNorm(s)).filter(x=>x.length>=2);
+    }
+    const dExcluded = excluded.some(ex => dN && (ex.includes(dN)||dN.includes(ex)));
+    // 학과 일치 강도: 완전일치 > 포함관계
+    const exactDept = dN && dN.length>=2 && danN===dN;
+    const deptHit = dN && dN.length>=2 && danN &&
+                    (danN.includes(dN) || dN.includes(danN));
+    if(isCatchAll){
+      if(dExcluded) sc-=100;         // 포괄(~제외)인데 카드가 제외대상 → 배제
+      else sc+=2;                    // 포괄: 학과 무관 기본 적용
+    } else if(exactDept){
+      sc+=20;                        // ★ 학과 완전일치 → 최우선 (포괄·전형명 무관하게 승리)
+    } else if(deptHit){
+      sc+=8;                         // 학과 포함관계 일치
+    } else if(danN && danN!=='전체'){
+      sc-=100;                       // 전용 규칙인데 카드 학과 불일치 → 배제
+    }
+    const blob=_snNorm(danRaw+(r['비고']||''));
+    if(dN && dN.length>=2 && (blob.includes(dN)||dN.includes(blob))) sc+=1;
+    return {r,sc};
+  }).sort((a,b)=>{
+    if(b.sc!==a.sc) return b.sc-a.sc;
+    // 동점: 최저 '없음' 행을 먼저 (오매칭으로 인한 잘못된 미달 경고 방지)
+    const an=String(a.r['최저적용'])==='없음'?0:1;
+    const bn=String(b.r['최저적용'])==='없음'?0:1;
+    return an-bn;
+  });
+  const best=scored[0];
+  if(!best || best.sc<=0) return null;
+  const r=best.r;
+  if(String(r['최저적용'])==='없음') return { none:true };
+  const ev = _evalSuneungRule(r, _mockG);
+
+  // ★ 2026-05-18: 라벨 생성을 숫자 파싱 기반으로 통일
+  //   - 기존 버그: 규칙_상위N 이 "3.0"(소수점)이면 /^\d+$/ 불일치 → "N개" 누락
+  //               ("2"는 붙고 "3.0"은 안 붙어 충족/미달과 무관하게 표기 들쭉날쭉)
+  //   - 기존 버그: 등급합을 최저기준_설명 텍스트 정규식으로 뽑아 8건 미스
+  //   - 이제 규칙 컬럼만 parseInt/parseFloat 로 일관 처리 + 각등급 라벨 지원
+  const single = String(r['규칙_단일등급']||'').trim();
+  const eachG  = parseFloat(r['규칙_각등급']);
+  const gsumN  = parseFloat(r['규칙_등급합']);
+  const must   = String(r['규칙_필수']||'').trim();
+  const topRaw = String(r['규칙_상위N']||'').trim();
+  const poolN  = String(r['규칙_풀과목']||'').split(',').filter(Boolean).length;
+
+  // 선택 영역 개수 N (상위N개 / all / 필수+상위)
+  let pickN = 0;
+  if(topRaw === 'all') pickN = poolN;
+  else { const t = parseInt(topRaw); if(!isNaN(t)) pickN = t; }
+  // ★ 2026-05-18 재수정: 풀과목에 필수과목이 없으면(패턴A: 경북대 "국영탐중2+수학")
+  //   상위N개에 수학이 별도 추가되므로 표시 개수는 +1 (총 N+1개)
+  const _poolArr = String(r['규칙_풀과목']||'').split(',').map(s=>s.trim()).filter(Boolean);
+  if(must && _poolArr.indexOf(must) < 0 && pickN > 0) pickN += 1;
+  const cntTxt = pickN > 0 ? (pickN + '개 ') : '';
+
+  const _n = x => (x % 1 === 0 ? String(x|0) : String(x)); // 3.0→"3", 2.5→"2.5"
+  let shortLabel;
+  if(single){
+    shortLabel = '상위1개 ' + _n(parseFloat(single)) + '등급';
+  } else if(!isNaN(eachG)){
+    // 서강대 지역균형류: "상위N개 각 M등급" (+ 등급합 복합 시 함께 표기)
+    shortLabel = (cntTxt || '상위 ') + '각 ' + _n(eachG) + '등급'
+               + (!isNaN(gsumN) ? (' · 합 ' + _n(gsumN)) : '');
+  } else if(!isNaN(gsumN)){
+    shortLabel = cntTxt + '합 ' + _n(gsumN);
+  } else {
+    shortLabel = '기준확인';
+  }
+
+  return {
+    none:false,
+    label: shortLabel,
+    desc: r['최저기준_설명']||'',
+    judged: ev.judged,
+    pass: ev.pass,
+    mySum: ev.sum!=null ? ev.sum : null,
+    worstGrade: ev.worstGrade!=null ? ev.worstGrade : null, // 각등급 케이스: 고른 영역 중 최저 등급
+    detail: ev.detail||''
+  };
 }
 
 function renderMajorAdmissions() {
@@ -7749,171 +8068,6 @@ function renderMajorAdmissions() {
 
   // ── 수능최저 매칭 헬퍼 (학과 카드용) ──
   const _mockG = _getStudentMockGrades(String(currentStu?.hak||''));
-  // ★ 2026-05-18: '의학과'→'의'(1글자) 되어 매칭 끊기던 버그 수정
-  //   접미(학과/학부/전공/계열) 제거 후 2글자 미만이면 원형 유지
-  const _snNorm = s=>{
-    let x=String(s||'').trim().toLowerCase().replace(/\s/g,'').replace(/[()（）]/g,'');
-    const st=x.replace(/(학과|학부|전공|학전공|계열)$/,'');
-    return st.length>=2 ? st : x;
-  };
-  // 대학명 전용 정규화: "서울대학교"="서울대"="서울대학" 통일
-  // ★ 2026-05-18 수정: 캠퍼스 괄호(글로컬/서울/ERICA/WISE 등)를 분리해서
-  //   본체 접미어(대학교/대학/대)를 먼저 정리한 뒤 캠퍼스를 다시 붙임.
-  //   기존 버그: 괄호를 먼저 떼어 "건국대학교글로컬"이 되면 끝이 '글로컬'이라
-  //   /대학교$/ 가 안 걸려, "건국대(글로컬)"="건국대글로컬" 과 불일치 → 매칭 실패.
-  const _uniKey = s=>{
-    let raw=String(s||'').trim().toLowerCase().replace(/\s/g,'');
-    // 괄호 안 캠퍼스명 추출 (예: 글로컬, 서울, erica, wise, 성의, 메디컬 …)
-    let campus='';
-    const m=raw.match(/[(（]([^)）]*)[)）]/);
-    if(m) campus=m[1];
-    let body=raw.replace(/[(（][^)）]*[)）]/g,''); // 괄호 통째 제거 → 순수 본체
-    body=body.replace(/대학교$/,'').replace(/대학$/,'').replace(/대$/,'');
-    return campus ? (body+'@'+campus) : body;
-  };
-  function _suneungForCard(univ, dept, jeonhyeong){
-    if(!suneungMin || !suneungMin.length) return null;
-    const uN=_snNorm(univ), dN=_snNorm(dept);
-    const uKey=_uniKey(univ);
-    // 본체/캠퍼스 분리 ("건국대@글로컬" → body="건국대", campus="글로컬")
-    const _split = k => { const i=String(k||'').indexOf('@'); return i<0 ? {b:String(k||''),c:''} : {b:k.slice(0,i),c:k.slice(i+1)}; };
-    const us=_split(uKey);
-    const _univMatch = (rUniRaw) => {
-      const rs=_split(_uniKey(rUniRaw));
-      if(!us.b || !rs.b) return false;
-      // 본체 매칭 (동일 또는 3글자 이상 부분포함)
-      let bodyOk = us.b===rs.b;
-      if(!bodyOk){
-        const sh = us.b.length<=rs.b.length ? us.b : rs.b;
-        const lo = us.b.length<=rs.b.length ? rs.b : us.b;
-        bodyOk = sh.length>=3 && lo.includes(sh);
-      }
-      if(!bodyOk) return false;
-      // 캠퍼스: 양쪽 다 있으면 반드시 일치 / 한쪽이라도 비면 통과(유연)
-      if(us.c && rs.c) return us.c===rs.c || us.c.includes(rs.c) || rs.c.includes(us.c);
-      return true;
-    };
-    const rows = suneungMin.filter(r=> _univMatch(r['대학']));
-    if(!rows.length) return null;
-    const tg = /종합/.test(jeonhyeong)?'종합' : /교과/.test(jeonhyeong)?'교과' : /논술/.test(jeonhyeong)?'논술' : '';
-    // ★ 2026-05-18: 전형명 키워드 매칭 추가
-    //   - 기존 버그: 전형군(종합/교과/논술)만으로 매칭 → 같은 '종합'이라도
-    //     바람개비/의약학/기회균형 구분 못 함. 동점 시 첫 행(의약학 등 빡센 최저)을
-    //     엉뚱한 학과(바람개비 등)에 잘못 붙여 "4개 합 3 · 미달"처럼 오표시.
-    //   - 해결: 카드 전형명과 suneung_min 전형명의 핵심 키워드가 겹치면 큰 가산점(+6).
-    //           매칭 실패 동점 시 '최저 없는 행' 우선(잘못된 미달 표시보다 안전).
-    const jhN = _snNorm(jeonhyeong);
-    // suneung_min 전형명에서 비교용 핵심 키워드 추출 (괄호·'학생부'·'전형' 등 제거)
-    const _jhKeywords = nm => {
-      let s = _snNorm(nm);
-      s = s.replace(/학생부종합|학생부교과|학생부|전형|일반|[()（）ⅰⅱⅲ\d]/g,'');
-      // 2글자 이상 의미 토큰만 (예: 바람개비, 의약학, 지역균형, 기회균형, 추천, 활동우수)
-      return s.length>=2 ? s : '';
-    };
-    const scored = rows.map(r=>{
-      let sc=0;
-      const rg=String(r['전형군']||'');
-      if(tg && rg===tg) sc+=4; else if(rg==='전체') sc+=1;
-      if(/일반/.test(r['전형명']||'')) sc+=1;
-      // 전형명 핵심 키워드가 카드 전형 문자열에 포함되면 가산점
-      const kw=_jhKeywords(r['전형명']||'');
-      if(kw && jhN.includes(kw)) sc+=6;
-      // ★ 2026-05-18: 단과대학 학과 적용범위 판정 (B방식 — 학과 정확일치 최우선)
-      //   원칙: 카드 학과가 단과대학과 '정확히' 일치하면(의학과=의학과)
-      //   그게 포괄("전체")보다 무조건 우선. 전형명 매칭 실패해도 학과일치가 이김.
-      //   유형: ①전용("의예과","약학과") ②포괄("전체","전체(의예 제외)","인문·자연계열")
-      //         ③단과대세분("사범대학 수학교육과")
-      const danRaw = String(r['단과대학']||'').trim();
-      const danFlat = danRaw.replace(/\s/g,'');
-      const danN = _snNorm(danRaw);
-      const isCatchAll = /전체|외전체|그외|이외|나머지/.test(danFlat)
-        || /^인문계?[·,]?자연계?/.test(danFlat)
-        || /^인문[·,]자연/.test(danFlat)
-        || danFlat==='인문계열' || danFlat==='자연계열'
-        || danFlat==='인문·자연계열' || danFlat==='인문계열·자연계열';
-      let excluded = [];
-      const exM = danRaw.match(/[(（]([^)）]*?)(제외)[)）]/);
-      if(exM){
-        excluded = exM[1].split(/[·,및\/、\s]+/).map(s=>_snNorm(s)).filter(x=>x.length>=2);
-      }
-      const dExcluded = excluded.some(ex => dN && (ex.includes(dN)||dN.includes(ex)));
-      // 학과 일치 강도: 완전일치 > 포함관계
-      const exactDept = dN && dN.length>=2 && danN===dN;
-      const deptHit = dN && dN.length>=2 && danN &&
-                      (danN.includes(dN) || dN.includes(danN));
-      if(isCatchAll){
-        if(dExcluded) sc-=100;         // 포괄(~제외)인데 카드가 제외대상 → 배제
-        else sc+=2;                    // 포괄: 학과 무관 기본 적용
-      } else if(exactDept){
-        sc+=20;                        // ★ 학과 완전일치 → 최우선 (포괄·전형명 무관하게 승리)
-      } else if(deptHit){
-        sc+=8;                         // 학과 포함관계 일치
-      } else if(danN && danN!=='전체'){
-        sc-=100;                       // 전용 규칙인데 카드 학과 불일치 → 배제
-      }
-      const blob=_snNorm(danRaw+(r['비고']||''));
-      if(dN && dN.length>=2 && (blob.includes(dN)||dN.includes(blob))) sc+=1;
-      return {r,sc};
-    }).sort((a,b)=>{
-      if(b.sc!==a.sc) return b.sc-a.sc;
-      // 동점: 최저 '없음' 행을 먼저 (오매칭으로 인한 잘못된 미달 경고 방지)
-      const an=String(a.r['최저적용'])==='없음'?0:1;
-      const bn=String(b.r['최저적용'])==='없음'?0:1;
-      return an-bn;
-    });
-    const best=scored[0];
-    if(!best || best.sc<=0) return null;
-    const r=best.r;
-    if(String(r['최저적용'])==='없음') return { none:true };
-    const ev = _evalSuneungRule(r, _mockG);
-
-    // ★ 2026-05-18: 라벨 생성을 숫자 파싱 기반으로 통일
-    //   - 기존 버그: 규칙_상위N 이 "3.0"(소수점)이면 /^\d+$/ 불일치 → "N개" 누락
-    //               ("2"는 붙고 "3.0"은 안 붙어 충족/미달과 무관하게 표기 들쭉날쭉)
-    //   - 기존 버그: 등급합을 최저기준_설명 텍스트 정규식으로 뽑아 8건 미스
-    //   - 이제 규칙 컬럼만 parseInt/parseFloat 로 일관 처리 + 각등급 라벨 지원
-    const single = String(r['규칙_단일등급']||'').trim();
-    const eachG  = parseFloat(r['규칙_각등급']);
-    const gsumN  = parseFloat(r['규칙_등급합']);
-    const must   = String(r['규칙_필수']||'').trim();
-    const topRaw = String(r['규칙_상위N']||'').trim();
-    const poolN  = String(r['규칙_풀과목']||'').split(',').filter(Boolean).length;
-
-    // 선택 영역 개수 N (상위N개 / all / 필수+상위)
-    let pickN = 0;
-    if(topRaw === 'all') pickN = poolN;
-    else { const t = parseInt(topRaw); if(!isNaN(t)) pickN = t; }
-    // ★ 2026-05-18 재수정: 풀과목에 필수과목이 없으면(패턴A: 경북대 "국영탐중2+수학")
-    //   상위N개에 수학이 별도 추가되므로 표시 개수는 +1 (총 N+1개)
-    const _poolArr = String(r['규칙_풀과목']||'').split(',').map(s=>s.trim()).filter(Boolean);
-    if(must && _poolArr.indexOf(must) < 0 && pickN > 0) pickN += 1;
-    const cntTxt = pickN > 0 ? (pickN + '개 ') : '';
-
-    const _n = x => (x % 1 === 0 ? String(x|0) : String(x)); // 3.0→"3", 2.5→"2.5"
-    let shortLabel;
-    if(single){
-      shortLabel = '상위1개 ' + _n(parseFloat(single)) + '등급';
-    } else if(!isNaN(eachG)){
-      // 서강대 지역균형류: "상위N개 각 M등급" (+ 등급합 복합 시 함께 표기)
-      shortLabel = (cntTxt || '상위 ') + '각 ' + _n(eachG) + '등급'
-                 + (!isNaN(gsumN) ? (' · 합 ' + _n(gsumN)) : '');
-    } else if(!isNaN(gsumN)){
-      shortLabel = cntTxt + '합 ' + _n(gsumN);
-    } else {
-      shortLabel = '기준확인';
-    }
-
-    return {
-      none:false,
-      label: shortLabel,
-      desc: r['최저기준_설명']||'',
-      judged: ev.judged,
-      pass: ev.pass,
-      mySum: ev.sum!=null ? ev.sum : null,
-      worstGrade: ev.worstGrade!=null ? ev.worstGrade : null, // 각등급 케이스: 고른 영역 중 최저 등급
-      detail: ev.detail||''
-    };
-  }
   const is9native = isStudent9Grade(currentStu);
   const scaleNote = is9native ? '' : ' <span style="font-size:10px;color:#9333ea;font-weight:600;">(9등급 환산)</span>';
 
@@ -8012,6 +8166,8 @@ function renderMajorAdmissions() {
   //   여기서는 추가 keywordMatch 만 한 번 더 적용(이중 안전).
   //   해당 학생용 데이터가 없으면 전역 cutoffDB(getCutoffAll) 폴백.
   const _stuHak = String(currentStu?.hak || currentStu?.학번 || '');
+  // ★ 2026-05-19: 현재 학생 캐시가 있으면 포인터를 즉시 동기화(서버 왕복 없이 표시)
+  if (cutoffCache[_stuHak] && cutoffByStu.hak !== _stuHak) _syncCutoffPtr(_stuHak);
   const _useStuCut = cutoffByStu.hak === _stuHak && cutoffByStu.rows.length > 0;
   const _cutSource = _useStuCut ? cutoffByStu.rows : (cutoffDB || []);
   const cutMatched = _cutSource.filter(r => {
@@ -8125,7 +8281,7 @@ function renderMajorAdmissions() {
     const cutYear = r.cut50_2026 ? '26년' : r.cut50_2025 ? '25년' : '24년';
 
     // ── 수능최저 표시 ──
-    const sn = _suneungForCard(r['대학'], r['모집단위'], (r['전형']||'')+(r['세부전형명']||''));
+    const sn = _suneungForCard(r['대학'], r['모집단위'], (r['전형']||'')+(r['세부전형명']||''), _mockG);
     let snHtml = '';
     if(sn){
       if(sn.none){
