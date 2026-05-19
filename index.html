@@ -7934,7 +7934,15 @@ function _suneungForCard(univ, dept, jeonhyeong, _mockG){
     const danRaw = String(r['단과대학']||'').trim();
     const danFlat = danRaw.replace(/\s/g,'');
     const danN = _snNorm(danRaw);
-    const isCatchAll = /전체|외전체|그외|이외|나머지/.test(danFlat)
+    // ★ 2026-05-19: "해당 모집단위"/"전 모집단위"/"전모집단위" = 전 학과 적용 포괄 표현.
+    //   기존: isCatchAll 정규식이 이걸 몰라서 전용규칙으로 오인→배제(명지대 등 22행 누락).
+    //   주의: "체육 관련 모집단위"/"인문계열 전 모집단위(…제외)"처럼 한정 조건이
+    //         붙은 건 제외하고, 단독 전체 의미일 때만 포괄로 인정.
+    const _isWholeUnit = danFlat==='해당모집단위' || danFlat==='전모집단위'
+      || danFlat==='전체모집단위' || danFlat==='모집단위' || danFlat==='해당모집단위전체'
+      || danFlat==='상기모집단위외전체' || /^전모집단위$/.test(danFlat);
+    const isCatchAll = _isWholeUnit
+      || /전체|외전체|그외|이외|나머지/.test(danFlat)
       || /^인문계?[·,]?자연계?/.test(danFlat)
       || /^인문[·,]자연/.test(danFlat)
       || danFlat==='인문계열' || danFlat==='자연계열'
