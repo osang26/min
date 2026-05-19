@@ -1763,11 +1763,17 @@ function calcStudentAvg(studentData, filter, stu){
 }
 
 // 전체 학생 중 현재 학생의 등수 계산
+// ★ 2026-05-19: 학교 등수는 '같은 학년' 안에서만 매겨야 의미가 있음.
+//   기존: students 전체(2·3학년 혼합)를 세어 전체 인원으로 잘못 계산.
+//   수정: currentStu 와 같은 학년(학번 첫자리)인 학생만 비교 대상으로 한정.
 function calcRank(currentData, filter){
   const myAvg = calcStudentAvg(currentData, filter, currentStu);
   if(myAvg===null) return null;
+  const myGrade = String(currentStu && currentStu.hak || '')[0];
   let rank=1, total=0;
   students.forEach(stu=>{
+    // 같은 학년만 (학번 첫자리 비교) — 학년 정보 없으면 건너뜀
+    if(String(stu.hak||'')[0] !== myGrade) return;
     const data = getStudentGrades(stu);
     if(!data) return;
     const avg = calcStudentAvg(data, filter, stu);
