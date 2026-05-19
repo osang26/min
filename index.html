@@ -6429,64 +6429,92 @@ function renderMock(el){
         + '모의고사 등급 데이터가 없어 충족 판정을 할 수 없습니다.</div>';
       return;
     }
-    // suneung_min 에서 학생 희망전공에 매칭되는 (대학, 단과대학, 전형) 후보 추출
-    const _smNorm = s => String(s||'').trim().toLowerCase().replace(/\s/g,'').replace(/[()（）]/g,'')
-      .replace(/(학과|학부|전공|학전공|계열)$/,'');
-    const mjN = _smNorm(stuMajor), crN = _smNorm(stuCareer);
-    // 학생 계열(인문/자연) 판별 — 포괄규칙은 같은 계열일 때만 인정
-    const _track = (function(){
-      const t=(stuMajor+' '+stuCareer).toLowerCase();
-      const nat=['공학','이공','과학','수학','물리','화학','생물','지구','컴퓨터','의예','의학','약학','한의','치의','수의','간호','식품','건축','전자','전기','기계','바이오','반도체'];
-      const hum=['인문','사회','경영','경제','회계','법','정치','국어','영어','국제','심리','복지','문','어','교육','광고','언론','관광','경찰','행정'];
-      const isN=nat.some(k=>t.includes(k)), isH=hum.some(k=>t.includes(k));
-      if(isN&&!isH) return '자연'; if(isH&&!isN) return '인문'; return '?';
-    })();
-    const deptMatch = (danRaw) => {
-      const dn = _smNorm(danRaw);
-      if(!dn) return false;
-      const flat = String(danRaw||'').replace(/\s/g,'');
-      // 학과 직접 매칭 (전공/진로 키워드가 단과대학명에 포함)
-      if(mjN.length>=2 && (dn.includes(mjN)||mjN.includes(dn))) return true;
-      if(crN.length>=2 && (dn.includes(crN)||crN.includes(dn))) return true;
-      // 포괄 규칙(전체/인문·자연계열): 학생 계열과 일치할 때만 (남용 방지)
-      const isCatchAll = /전체|전모집단위|인문계?[·,]?자연|인문[·,]자연|인문계열|자연계열/.test(flat);
-      if(isCatchAll){
-        if(_track==='자연' && /자연|전체|전모집단위/.test(flat)) return true;
-        if(_track==='인문' && /인문|전체|전모집단위/.test(flat)) return true;
-        return false; // 계열 불명이면 포괄은 제외(정확도 우선)
-      }
-      return false;
+    // ★ 2026-05-19: 모의고사 탭 수능최저 충족현황을 합불현황 탭과
+    //   '동일한 후보 목록'으로 재구축.
+    //   기존 문제: 모의고사 탭이 suneung_min 단과대학 칸에 학생 전공 글자가
+    //     들어가는지만 봐서(deptMatch), 미디어학과처럼 suneung_min에
+    //     단과대 단위("사회과학대학")로만 적힌 전공은 2개만 잡히고,
+    //     반대로 흔한 키워드는 150개씩 폭주 → 합불현황 탭과 개수 불일치.
+    //   해결: 합불현황 탭과 똑같이 admissionsDB+cutoffDB를 학생 전공/진로
+    //     키워드로 매칭해 (대학, 모집단위) 후보를 만들고, 각 후보에
+    //     검증된 _suneungForCard(단과대 자동추론 포함)로 최저 판정만 입힘.
+    //     → 두 탭의 대학·학과 목록이 항상 일치.
+    const _nrm = s => {
+      let x=String(s||'').trim().toLowerCase().replace(/\s/g,'').replace(/[()（）]/g,'');
+      const st=x.replace(/(학과|학부|전공|학전공|계열)$/,'');
+      return st.length>=2 ? st : x;
     };
-    // 대학+학과(단과대) 단위로 대표 1개만 (전형 여러개·중복행 정리)
-    //  - 직접매칭(전공/진로 키워드가 단과대학명에 포함) = 우선 표시
-    //  - 포괄매칭(전체/계열) = 보조 (직접매칭과 구분, 뒤로)
-    const bestByKey = {};
-    (suneungMin||[]).forEach(r=>{
-      const danRaw = r['단과대학']||'';
-      if(!deptMatch(danRaw)) return;
-      const u = r['대학']||'';
-      const jh = r['전형명']||'';
-      const dn = _smNorm(danRaw);
-      // 직접매칭 여부 판정 (전공/진로 키워드가 학과명에 실제 포함)
-      const isDirect = (mjN.length>=2 && (dn.includes(mjN)||mjN.includes(dn)))
-                    || (crN.length>=2 && (dn.includes(crN)||crN.includes(dn)));
-      const sn = _suneungForCard(u, danRaw || stuMajor, jh, _mg);
-      if(sn==null) return;
-      const key = _smNorm(u)+'|'+dn;
-      const prev = bestByKey[key];
-      const score = c => c.none?1 : (c.judged ? (c.pass?4:3) : 2);
-      if(!prev || score(sn) > score(prev.sn))
-        bestByKey[key] = { univ:u, dan:danRaw, jh, sn, direct:isDirect };
+    const _mjN = _nrm(stuMajor), _crN = _nrm(stuCareer);
+    // 합불현황 탭과 동일한 진로직업→학과키워드 매핑(축약본: 자주 쓰는 것만)
+    const _JOBKW = {
+      '간호사':['간호'],'약사':['약학'],'의사':['의예','의학'],'치과의사':['치의'],
+      '한의사':['한의'],'수의사':['수의'],'교사':['교육'],'선생님':['교육'],
+      '체육교사':['체육교육','체육'],'영어교사':['영어교육','영어'],'수학교사':['수학교육','수학'],
+      '국어교사':['국어교육','국어'],'유치원교사':['유아교육'],'초등교사':['초등교육'],
+      '변호사':['법학','법'],'판사':['법학','법'],'검사':['법학','법'],
+      '회계사':['회계','경영'],'경찰':['경찰행정','경찰'],'경찰관':['경찰행정','경찰'],
+      '공무원':['행정'],'회사원':['경영','경제'],'사업가':['경영'],
+      '마케팅전문가':['경영','광고홍보','미디어'],'프로그래머':['컴퓨터','소프트웨어'],
+      '개발자':['컴퓨터','소프트웨어'],'엔지니어':['공학'],'건축가':['건축'],
+      '아나운서':['미디어','방송','언론'],'디자이너':['디자인'],'심리상담사':['심리','상담'],
+      '상담사':['심리','상담'],'사서':['문헌정보']
+    };
+    let _crKws=[];
+    (function(){
+      const raw=String(stuCareer||'').trim().toLowerCase().replace(/\s/g,'');
+      if(!raw) return;
+      if(_JOBKW[raw]){ _crKws=_JOBKW[raw]; return; }
+      for(const k in _JOBKW){ if(k.length>=2 && raw.includes(k)){ _crKws=_JOBKW[k]; return; } }
+    })();
+    function _kwHit(dept, kw){
+      if(!kw||kw.length<2) return false;
+      if(dept===kw) return true;
+      if(kw.length>=3){ if(dept.includes(kw)||kw.includes(dept)) return true; }
+      else { if(dept.startsWith(kw)||dept.endsWith(kw)) return true;
+              if(dept.length>=3 && kw.includes(dept)) return true; }
+      return false;
+    }
+    function _kwMatch(deptStr){
+      const d=_nrm(deptStr);
+      if(!d) return false;
+      if(_kwHit(d,_mjN)) return true;
+      for(const kw of _crKws){ if(_kwHit(d,_nrm(kw))) return true; }
+      if(_crKws.length===0 && _kwHit(d,_crN)) return true;
+      return false;
+    }
+    // 합불현황 탭과 동일하게 admissionsDB + cutoffDB 에서 후보 (대학,모집단위) 추출
+    const _seenPair = new Set();
+    const _pairs = [];
+    (admissionsDB||[]).forEach(r=>{
+      if(parseInt(r['합격건수']||0)<=0) return;
+      const t=String(r['전형유형']||'');
+      if(t.includes('정시')||t.includes('수능')) return;
+      const u=r['대학명']||'', d=r['모집단위']||'';
+      if(!_kwMatch(d)) return;
+      const k=_nrm(u)+'|'+_nrm(d);
+      if(_seenPair.has(k)) return; _seenPair.add(k);
+      _pairs.push({univ:u, dept:d});
     });
-    let cands = Object.values(bestByKey);
-    // 직접매칭이 하나라도 있으면 포괄(비직접)은 숨김 → 노이즈 제거
-    const directOnes = cands.filter(c=>c.direct);
-    if(directOnes.length >= 1) cands = directOnes;
-    // 그래도 너무 많으면 최저있는 것 우선 + 대학명 정렬로 상위 60개
+    const _cutSrc = (cutoffByStu && cutoffByStu.hak===String(currentStu?.hak||'') && cutoffByStu.rows.length)
+      ? cutoffByStu.rows : (cutoffDB||[]);
+    (_cutSrc||[]).forEach(r=>{
+      const t=String(r['전형']||'');
+      if(t.includes('정시')||t.includes('수능')) return;
+      if(!(r['50컷_2026']||r['50컷_2025']||r['50컷_2024'])) return;
+      const u=r['대학']||'', d=r['모집단위']||'';
+      if(!_kwMatch(d)) return;
+      const k=_nrm(u)+'|'+_nrm(d);
+      if(_seenPair.has(k)) return; _seenPair.add(k);
+      _pairs.push({univ:u, dept:d});
+    });
+    // 각 후보에 검증된 _suneungForCard 로 최저 판정 입힘 (단과대 자동추론 포함)
+    let cands = _pairs.map(p=>{
+      const sn = _suneungForCard(p.univ, p.dept, '', _mg);
+      return { univ:p.univ, dan:p.dept, jh:'', sn: sn || {none:true} };
+    });
     if(!cands.length){
       matchedUnivHtml = '<div style="margin-top:14px;padding:16px 18px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;color:#64748b;font-size:13px;">'
-        + '희망 전공에 매칭되는 수능최저 데이터(suneung_min)가 없습니다.<br>'
-        + '<span style="font-size:11px;color:#94a3b8;">현재 suneung_min에 정비된 대학(약 58개) 중 매칭되는 곳이 없을 수 있습니다.</span></div>';
+        + '희망 전공·진로에 매칭되는 합불·입결 데이터가 없습니다.</div>';
       return;
     }
     // 정렬: 충족 > 미달 > 최저없음/판정불가, 그 안에서 대학명
@@ -7909,11 +7937,13 @@ function _collegeMatch(danN, deptN){
   if(!danN || !deptN) return false;
   const cols=_inferColleges(deptN);
   if(!cols.length) return false;
-  // danN 은 _snNorm 거친 값(접미 '대학' 등은 보존됨 — 2글자 이상이면).
-  // 단과대 키도 동일 정규화 후 비교 (부분포함 허용: "공과대학"⊂"천안공과대학")
+  // ★ 2026-05-19: 복합 단과대 나열(A대학·B대학/C학부) 분해해서 각각 검사.
+  //   부산대 "인문대학·사회과학대학·…" 처럼 묶인 행이 144행 → 누락 방지.
+  const toks=String(danN).split(/[·,／/、]+/).map(t=>t.trim()).filter(Boolean);
+  const cands = toks.length ? toks : [danN];
   return cols.some(col=>{
     const cN=String(col).toLowerCase().replace(/\s/g,'');
-    return danN===cN || danN.includes(cN) || cN.includes(danN);
+    return cands.some(t=> t===cN || t.includes(cN) || cN.includes(t));
   });
 }
 
@@ -8020,7 +8050,11 @@ function _suneungForCard(univ, dept, jeonhyeong, _mockG){
     //   suneung_min 단과대학 칸이 "공과대학" 등 단과대 단위일 때,
     //   카드 학과("화학공학과")가 그 단과대 소속인지 추론해서 연결.
     //   (계명대·명지대처럼 최저 "있음"인데 누락되던 47% 케이스 해결)
-    const _isCollegeUnit = /대학$|대학교$|학부$|college$/.test(danN);
+    // ★ 2026-05-19: 단과대 단위 판정. 단일("공과대학") 뿐 아니라
+    //   복합 나열("인문대학·사회과학대학·…/스포츠과학과")도 인식해야
+    //   부산대·경상대 등에서 최저"있음"이 누락되지 않음(144행).
+    //   '대학'/'학부' 단어가 포함되면 단과대 단위로 간주(끝문자 한정 X).
+    const _isCollegeUnit = /대학|학부|college/i.test(danN);
     const collegeHit = !exactDept && !deptHit && _isCollegeUnit && _collegeMatch(danN, dN);
     if(isCatchAll){
       if(dExcluded) sc-=100;         // 포괄(~제외)인데 카드가 제외대상 → 배제
