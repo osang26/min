@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>오상고 내신·모의고사 조회</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;background:#f4f6f9;color:#1a2233;font-size:14px;line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:14px}
+  .card{background:#fff;border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:18px;margin-bottom:14px}
+  h1{font-size:18px;font-weight:800;color:#2b3a67}
+  h2{font-size:15px;font-weight:700;margin-bottom:10px;color:#2b3a67}
+  button{font-family:inherit;cursor:pointer;border:none;border-radius:10px;font-size:14px;padding:10px 16px;font-weight:600}
+  .btn-pri{background:#3858b8;color:#fff}
+  .btn-pri:active{background:#2b3a67}
+  .btn-ghost{background:#eef1f7;color:#3858b8}
+  input,select{font-family:inherit;font-size:14px;padding:9px 11px;border:1px solid #d4dae6;border-radius:9px;width:100%}
+  /* 로그인 */
+  #login{max-width:380px;margin:60px auto}
+  #login .card{text-align:center}
+  #login h1{margin-bottom:6px}
+  #login p{color:#7a869c;font-size:13px;margin-bottom:18px}
+  #login input{margin-bottom:10px}
+  .hide{display:none!important}
+  /* 학생 목록 */
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .toolbar input,.toolbar select{width:auto;flex:1;min-width:120px}
+  .stu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+  .stu{background:#fff;border:1px solid #e6eaf2;border-radius:11px;padding:11px 13px;cursor:pointer;transition:.1s}
+  .stu:active{background:#eef1f7}
+  .stu .nm{font-weight:700;font-size:15px}
+  .stu .meta{color:#7a869c;font-size:12px;margin-top:2px}
+  .stu .career{color:#3858b8;font-size:12px;margin-top:4px}
+  /* 상세 */
+  .top-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .top-bar .back{background:#eef1f7;color:#3858b8;border-radius:9px;padding:8px 12px;font-weight:700}
+  .stu-head{font-size:17px;font-weight:800;color:#2b3a67}
+  .stu-sub{color:#7a869c;font-size:13px}
+  .tabs{display:flex;gap:6px;margin-bottom:14px;border-bottom:2px solid #eef1f7}
+  .tab{padding:9px 16px;font-weight:700;color:#9aa5bd;cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px}
+  .tab.active{color:#3858b8;border-bottom-color:#3858b8}
+  /* 성적 표 */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:7px 8px;text-align:center;border-bottom:1px solid #eef1f7}
+  th{background:#f7f9fc;font-weight:700;color:#5a6884;font-size:12px}
+  td.subj{text-align:left;font-weight:600}
+  .sem-title{font-weight:800;color:#2b3a67;margin:14px 0 6px;font-size:14px}
+  .avg-box{display:inline-block;background:#eef3ff;color:#2b4a9b;font-weight:800;padding:4px 12px;border-radius:8px;font-size:13px;margin-left:8px}
+  /* 합불 현황 */
+  .adm{border:1px solid #e6eaf2;border-radius:12px;padding:13px;margin-bottom:9px}
+  .adm .nm{font-weight:800;font-size:15px;color:#1a2233}
+  .adm .jh{color:#7a869c;font-size:12px;margin-top:2px}
+  .adm .nums{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:13px}
+  .adm .nums b{color:#2b4a9b}
+  .badge{display:inline-block;font-size:12px;font-weight:700;padding:3px 9px;border-radius:7px;margin-top:8px}
+  .b-ok{background:#e3f6ec;color:#1d8a4e}
+  .b-no{background:#fdeaea;color:#c0392b}
+  .b-none{background:#eef1f7;color:#7a869c}
+  .pos{display:inline-block;font-weight:800;font-size:15px;margin-top:6px}
+  .pos.안정{color:#1d8a4e}.pos.적정{color:#2b7fc4}.pos.도전{color:#d98a00}.pos.상향{color:#c0392b}
+  .empty{text-align:center;color:#9aa5bd;padding:40px 0;font-size:14px}
+  .loading{text-align:center;color:#7a869c;padding:30px 0}
+  .spin{display:inline-block;width:22px;height:22px;border:3px solid #e0e6f0;border-top-color:#3858b8;border-radius:50%;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  @media(max-width:640px){.wrap{padding:8px}.card{padding:13px}.stu-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}
+</style>
+</head>
+<body>
+
+<!-- 로그인 -->
+<div id="login" class="wrap">
+  <div class="card">
+    <h1>오상고 내신·모의고사 조회</h1>
+    <p>오상고 구글 계정(@osang.hs.kr)으로 로그인하세요.</p>
+    <input id="emailInput" type="email" placeholder="이름@osang.hs.kr" autocomplete="username">
+    <button class="btn-pri" style="width:100%" onclick="doLogin()">로그인</button>
+    <p id="loginMsg" style="color:#c0392b;margin-top:10px;margin-bottom:0"></p>
+  </div>
+</div>
+
+<!-- 메인 -->
+<div id="app" class="wrap hide">
+  <div class="card" style="display:flex;justify-content:space-between;align-items:center">
+    <h1 style="font-size:16px">오상고 내신·모의고사</h1>
+    <button class="btn-ghost" onclick="logout()">로그아웃</button>
+  </div>
+
+  <!-- 학생 목록 -->
+  <div id="listView" class="card">
+    <h2>학생 목록</h2>
+    <div class="toolbar">
+      <input id="search" placeholder="이름·학번 검색" oninput="renderList()">
+      <select id="gradeFilter" onchange="renderList()">
+        <option value="">전체 학년</option>
+        <option value="1">1학년</option><option value="2">2학년</option><option value="3">3학년</option>
+      </select>
+    </div>
+    <div id="stuGrid" class="stu-grid"></div>
+  </div>
+
+  <!-- 학생 상세 -->
+  <div id="detailView" class="hide">
+    <div class="card">
+      <div class="top-bar">
+        <button class="back" onclick="backToList()">← 목록</button>
+        <div>
+          <div class="stu-head" id="dHead"></div>
+          <div class="stu-sub" id="dSub"></div>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab active" data-tab="naesin" onclick="switchTab('naesin')">내신</div>
+        <div class="tab" data-tab="mock" onclick="switchTab('mock')">모의고사</div>
+      </div>
+      <div id="tabBody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  설정 — 배포 후 이 URL만 본인 것으로 교체
+// ============================================================
+const API_URL = 'YOUR_APPS_SCRIPT_WEB_APP_URL';
+
+let AUTH = { token:'', role:'' };
+let STUDENTS = [], GRADES = {}, MOCK = {}, SUNEUNG_MIN = [];
+let curStu = null, curTab = 'naesin';
+
+// ---------- 유틸 ----------
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function api(action, params){
+  const u = new URL(API_URL);
+  u.searchParams.set('action', action);
+  u.searchParams.set('password', AUTH.token);
+  for(const k in (params||{})) u.searchParams.set(k, params[k]);
+  return fetch(u).then(r=>r.json());
+}
+
+// ---------- 로그인 ----------
+function doLogin(){
+  const email = document.getElementById('emailInput').value.trim();
+  const msg = document.getElementById('loginMsg');
+  if(!email){ msg.textContent='이메일을 입력하세요.'; return; }
+  msg.textContent='확인 중...';
+  const u = new URL(API_URL);
+  u.searchParams.set('action','checkEmail');
+  u.searchParams.set('email', email);
+  fetch(u).then(r=>r.json()).then(res=>{
+    if(res.error){ msg.textContent=res.error; return; }
+    if(res.role==='pending'){ msg.textContent='접근 권한이 아직 없습니다. 관리자에게 문의하세요.'; return; }
+    AUTH.token=res.token; AUTH.role=res.role;
+    try{ localStorage.setItem('osang_lite_tok', res.token); }catch(e){}
+    enterApp();
+  }).catch(()=>{ msg.textContent='연결 실패. 잠시 후 다시 시도하세요.'; });
+}
+function logout(){
+  try{ localStorage.removeItem('osang_lite_tok'); }catch(e){}
+  AUTH={token:'',role:''};
+  document.getElementById('app').classList.add('hide');
+  document.getElementById('login').classList.remove('hide');
+}
+function tryAutoLogin(){
+  let tok=''; try{ tok=localStorage.getItem('osang_lite_tok')||''; }catch(e){}
+  if(!tok) return;
+  AUTH.token=tok;
+  const u=new URL(API_URL);
+  u.searchParams.set('action','checkRole'); u.searchParams.set('password',tok);
+  fetch(u).then(r=>r.json()).then(res=>{
+    if(res.role){ AUTH.role=res.role; enterApp(); }
+  }).catch(()=>{});
+}
+
+function enterApp(){
+  document.getElementById('login').classList.add('hide');
+  document.getElementById('app').classList.remove('hide');
+  document.getElementById('stuGrid').innerHTML='<div class="loading"><span class="spin"></span><div style="margin-top:8px">데이터 불러오는 중...</div></div>';
+  Promise.all([
+    api('getStudents'), api('getSuneungMin')
+  ]).then(([stu, sun])=>{
+    STUDENTS = Array.isArray(stu)?stu:[];
+    SUNEUNG_MIN = Array.isArray(sun)?sun:[];
+    renderList();
+  });
+}
+
+// ---------- 학생 목록 ----------
+function renderList(){
+  const q=(document.getElementById('search').value||'').trim().toLowerCase();
+  const gf=document.getElementById('gradeFilter').value;
+  const grid=document.getElementById('stuGrid');
+  let list=STUDENTS.filter(s=>{
+    const hak=String(s.hak||'');
+    if(gf && hak[0]!==gf) return false;
+    if(q && !(String(s.name||'').toLowerCase().includes(q) || hak.includes(q))) return false;
+    return true;
+  });
+  list.sort((a,b)=>String(a.hak).localeCompare(String(b.hak)));
+  if(!list.length){ grid.innerHTML='<div class="empty">학생이 없습니다.</div>'; return; }
+  grid.innerHTML=list.map(s=>{
+    const career=[s['진로'],s['전공']].filter(x=>x&&x!=='.'&&x!=='미정').join(' · ');
+    return `<div class="stu" onclick="openStu('${esc(s.hak)}')">
+      <div class="nm">${esc(s.name)}</div>
+      <div class="meta">${esc(s.hak)} · ${esc(s.grade)}학년 ${esc(s.class)}반 ${esc(s.number)}번</div>
+      ${career?`<div class="career">${esc(career)}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function openStu(hak){
+  curStu = STUDENTS.find(s=>String(s.hak)===String(hak));
+  if(!curStu) return;
+  document.getElementById('listView').classList.add('hide');
+  document.getElementById('detailView').classList.remove('hide');
+  document.getElementById('dHead').textContent = curStu.name;
+  const career=[curStu['진로'],curStu['전공']].filter(x=>x&&x!=='.'&&x!=='미정').join(' · ');
+  document.getElementById('dSub').textContent =
+    `${curStu.hak} · ${curStu.grade}학년 ${curStu.class}반 ${curStu.number}번${career?'  |  '+career:''}`;
+  curTab='naesin';
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab==='naesin'));
+  loadTab();
+}
+function backToList(){
+  document.getElementById('detailView').classList.add('hide');
+  document.getElementById('listView').classList.remove('hide');
+}
+function switchTab(t){
+  curTab=t;
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active', x.dataset.tab===t));
+  loadTab();
+}
+window.addEventListener('DOMContentLoaded', tryAutoLogin);
+</script>
+<script>
+// ============================================================
+//  내신 / 모의고사 / 희망전공 합불현황 렌더링
+// ============================================================
+
+function loadTab(){
+  const body=document.getElementById('tabBody');
+  body.innerHTML='<div class="loading"><span class="spin"></span><div style="margin-top:8px">불러오는 중...</div></div>';
+  const hak=String(curStu.hak);
+  if(curTab==='naesin'){
+    Promise.all([
+      GRADES[hak]!==undefined ? Promise.resolve(GRADES[hak]) : api('getGrades').then(g=>{GRADES=g||{};return GRADES[hak];}),
+      api('getCutoffByMajor', { major: curStu['전공']||'', career: curStu['진로']||'' }),
+      MOCK[hak]!==undefined ? Promise.resolve(MOCK[hak]) : api('getMockExam').then(m=>{MOCK=m||{};return MOCK[hak];})
+    ]).then(([g, cut, mk])=>{
+      _refreshSuneungContext(); renderNaesin(body, g, Array.isArray(cut)?cut:[]);
+    });
+  } else {
+    (MOCK[hak]!==undefined ? Promise.resolve(MOCK[hak]) : api('getMockExam').then(m=>{MOCK=m||{};return MOCK[hak];}))
+      .then(m=>renderMock(body, m));
+  }
+}
+
+// ---------- 내신 성적 + 합불현황 ----------
+function calcSemAvg(subjects){
+  let c=0,w=0;
+  (subjects||[]).forEach(s=>{
+    const g=parseFloat(s['등급']), cr=parseFloat(s['학점'])||1;
+    if(!isNaN(g)&&g>0){ c+=cr; w+=g*cr; }
+  });
+  return c>0 ? (w/c) : null;
+}
+function calcAllAvg(grades){
+  let c=0,w=0;
+  Object.keys(grades||{}).forEach(k=>{
+    (grades[k].subjects||[]).forEach(s=>{
+      const g=parseFloat(s['등급']), cr=parseFloat(s['학점'])||1;
+      if(!isNaN(g)&&g>0){ c+=cr; w+=g*cr; }
+    });
+  });
+  return c>0 ? (w/c) : null;
+}
+
+function renderNaesin(body, gjson, cutoff){
+  let html='';
+  // 1) 내신 성적
+  const grades = gjson && gjson.grades ? gjson.grades : null;
+  if(!grades || !Object.keys(grades).length){
+    html += '<div class="empty">내신 성적 데이터가 없습니다.</div>';
+  } else {
+    const allAvg=calcAllAvg(grades);
+    html += `<h2>내신 성적 ${allAvg?`<span class="avg-box">전과목 평균 ${allAvg.toFixed(2)}</span>`:''}</h2>`;
+    Object.keys(grades).sort().forEach(sem=>{
+      const sd=grades[sem]; const sa=calcSemAvg(sd.subjects);
+      html += `<div class="sem-title">${esc(sem)} ${sa?`<span class="avg-box">평균 ${sa.toFixed(2)}</span>`:''}</div>`;
+      html += '<table><tr><th>교과</th><th>과목</th><th>학점</th><th>원점수</th><th>등급</th><th>석차</th></tr>';
+      (sd.subjects||[]).forEach(s=>{
+        html += `<tr><td class="subj">${esc(s['교과'])}</td><td class="subj">${esc(s['과목'])}</td>
+          <td>${esc(s['학점'])}</td><td>${esc(s['원점수'])}</td>
+          <td><b>${esc(s['등급'])}</b></td>
+          <td>${s['석차']?esc(s['석차'])+'/'+esc(s['수강자수']):'-'}</td></tr>`;
+      });
+      html += '</table>';
+    });
+  }
+  // 2) 희망전공 합불현황
+  html += '<h2 style="margin-top:22px">희망전공 합불현황</h2>';
+  const career=[curStu['진로'],curStu['전공']].filter(x=>x&&x!=='.'&&x!=='미정').join(' · ');
+  html += `<p style="color:#7a869c;font-size:12px;margin-bottom:10px">기준: ${esc(career||'진로·전공 미입력')}</p>`;
+  html += renderAdmissions(cutoff, calcAllAvg(grades||{}));
+  body.innerHTML=html;
+}
+
+// 합불현황 카드 — cutoff + 수능최저 판정
+function renderAdmissions(cutoff, myAvg){
+  if(!cutoff || !cutoff.length){
+    return '<div class="empty">진로·전공에 해당하는 입결 데이터가 없습니다.<br><span style="font-size:12px">(진로/전공이 미입력이거나 매칭되는 학과가 없습니다)</span></div>';
+  }
+  // 대학+모집단위+전형 단위로 묶기
+  const seen=new Set(); let out=[];
+  cutoff.forEach(r=>{
+    const key=[r['대학'],r['모집단위'],r['전형']].join('|');
+    if(seen.has(key)) return; seen.add(key);
+    const c50 = r['50컷_2026']||r['50컷_2025']||r['50컷_2024'];
+    const c70 = r['70컷_2026']||r['70컷_2025']||r['70컷_2024'];
+    const yr  = r['50컷_2026']?'26': r['50컷_2025']?'25':'24';
+    // 합격 가능성 (전과목 평균 vs 70컷)
+    let pos='', posCls='';
+    const my=parseFloat(myAvg), cut70=parseFloat(c70), cut50=parseFloat(c50);
+    if(!isNaN(my)){
+      if(!isNaN(cut50) && my<=cut50){ pos='안정'; }
+      else if(!isNaN(cut70) && my<=cut70){ pos='적정'; }
+      else if(!isNaN(cut70) && my<=cut70+0.5){ pos='도전'; }
+      else if(!isNaN(cut70)){ pos='상향'; }
+      posCls=pos;
+    }
+    // 수능최저
+    const sn=_suneungForCard(r['대학'], r['모집단위'], (r['전형']||'')+(r['세부전형명']||''));
+    let snBadge='';
+    if(sn==null){ snBadge=''; }
+    else if(sn.none){ snBadge='<span class="badge b-none">수능최저 없음</span>'; }
+    else {
+      const lbl=esc(sn.label||'수능최저');
+      if(sn.judged && sn.pass) snBadge=`<span class="badge b-ok">최저 ${lbl} · 충족 ✓</span>`;
+      else if(sn.judged && !sn.pass) snBadge=`<span class="badge b-no">최저 ${lbl} · 미달 ⚠</span>`;
+      else snBadge=`<span class="badge b-none">최저 ${lbl}</span>`;
+    }
+    out.push({
+      html:`<div class="adm">
+        <div class="nm">${esc(r['대학'])} ${esc(r['모집단위'])}</div>
+        <div class="jh">${esc(r['전형'])}${r['세부전형명']?' · '+esc(r['세부전형명']):''}</div>
+        <div class="nums">
+          <span>50컷 <b>${esc(c50||'-')}</b></span>
+          <span>70컷 <b>${esc(c70||'-')}</b></span>
+          <span style="color:#9aa5bd">(${yr}년 기준)</span>
+          ${!isNaN(my)?`<span>내 평균 <b>${my.toFixed(2)}</b></span>`:''}
+        </div>
+        ${pos?`<span class="pos ${posCls}">${pos}</span> `:''}${snBadge}
+      </div>`,
+      sortKey: pos==='안정'?0:pos==='적정'?1:pos==='도전'?2:pos==='상향'?3:4
+    });
+  });
+  out.sort((a,b)=>a.sortKey-b.sortKey);
+  return `<p style="color:#7a869c;font-size:12px;margin-bottom:8px">총 ${out.length}개 모집단위</p>` + out.map(o=>o.html).join('');
+}
+
+// ---------- 모의고사 (성적만) ----------
+function renderMock(body, mjson){
+  if(!mjson || !mjson.length){
+    body.innerHTML='<div class="empty">모의고사 성적 데이터가 없습니다.</div>'; return;
+  }
+  let html='<h2>모의고사 성적</h2>';
+  mjson.slice().reverse().forEach(m=>{
+    const subs=['국어','수학','영어','한국사','탐구1','탐구2'];
+    html += `<div class="sem-title">${esc(m.year)} ${esc(m.month)} (${esc(m.grade_at)}학년)</div>`;
+    html += '<table><tr><th>영역</th><th>선택</th><th>원점수</th><th>표준점수</th><th>백분위</th><th>등급</th></tr>';
+    subs.forEach(k=>{
+      const v=m[k]; if(!v||typeof v!=='object') return;
+      html += `<tr><td class="subj">${esc(k)}</td>
+        <td>${esc(v['선택']||'-')}</td>
+        <td>${esc(v['원점수']!=null?v['원점수']:'-')}</td>
+        <td>${esc(v['표준점수']!=null?v['표준점수']:'-')}</td>
+        <td>${esc(v['백분위']!=null?v['백분위']:'-')}</td>
+        <td><b>${esc(v['등급']!=null?v['등급']:'-')}</b></td></tr>`;
+    });
+    html += '</table>';
+  });
+  body.innerHTML=html;
+}
+
+// 모의고사 등급 → _suneungForCard 가 쓰는 형식
+function _mockGradesFor(hak){
+  const m=MOCK[String(hak)];
+  if(!m || !m.length) return null;
+  const last=m[m.length-1];
+  const g=k=> (last[k]&&last[k]['등급']!=null) ? Number(last[k]['등급']) : null;
+  return { 국어:g('국어'), 수학:g('수학'), 영어:g('영어'), 탐구1:g('탐구1'), 탐구2:g('탐구2') };
+}
+function _mockGrades(){ return curStu ? _mockGradesFor(curStu.hak) : null; }
+function isStudent9Grade(){ return false; }
+</script>
+
+<script>
+// ============================================================
+//  검증된 수능최저 핵심 로직 (메인 시스템에서 그대로 이식)
+//  _snNorm/_uniKey/_evalSuneungRule/_suneungForCard
+//  전역 의존: suneungMin (= SUNEUNG_MIN), _mockG (현재 학생 모의등급)
+// ============================================================
+var suneungMin = [];
+var _mockG = null;
+
+  const _snNorm = s=>{
+    let x=String(s||'').trim().toLowerCase().replace(/\s/g,'').replace(/[()（）]/g,'');
+    const st=x.replace(/(학과|학부|전공|학전공|계열)$/,'');
+    return st.length>=2 ? st : x;
+  }
+  const _uniKey = s=>{
+    let raw=String(s||'').trim().toLowerCase().replace(/\s/g,'');
+    // 괄호 안 캠퍼스명 추출 (예: 글로컬, 서울, erica, wise, 성의, 메디컬 …)
+    let campus='';
+    const m=raw.match(/[(（]([^)）]*)[)）]/);
+    if(m) campus=m[1];
+    let body=raw.replace(/[(（][^)）]*[)）]/g,''); // 괄호 통째 제거 → 순수 본체
+    body=body.replace(/대학교$/,'').replace(/대학$/,'').replace(/대$/,'');
+    return campus ? (body+'@'+campus) : body;
+  }
+
+function _evalSuneungRule(rule, mg){
+  // rule: {풀과목,탐구반영,상위N,필수,등급합,단일등급}
+  if(!mg) return { judged:false };
+  const pool = String(rule['규칙_풀과목']||'').split(',').filter(Boolean);
+  if(!pool.length) return { judged:false };
+  const tamN = String(rule['규칙_탐구반영']||'1');
+  // 탐구 등급: 1과목=탐구1, 2과목=탐구1·2 평균(소수 처리)
+  let tam=null;
+  if(mg['탐구1']!=null && mg['탐구2']!=null) tam = tamN==='2' ? (mg['탐구1']+mg['탐구2'])/2 : Math.min(mg['탐구1'],mg['탐구2']);
+  else if(mg['탐구1']!=null) tam=mg['탐구1'];
+  const subjVal = { '국':mg['국어'], '수':mg['수학'], '영':mg['영어'], '탐':tam };
+  const avail = pool.map(k=>({k, v:subjVal[k]})).filter(o=>o.v!=null);
+  const must = String(rule['규칙_필수']||'').trim();
+  // 단일등급 기준 (미술/디자인: 상위1개 N등급 이내)
+  const single = String(rule['규칙_단일등급']||'').trim();
+  if(single){
+    const best = avail.length ? Math.min(...avail.map(o=>o.v)) : null;
+    if(best==null) return { judged:false };
+    const need=parseFloat(single);
+    return { judged:true, pass: best<=need, detail:`최고 ${best.toFixed(0)}등급 (기준 ${need}등급 이내)` };
+  }
+
+  // ★ 2026-05-18: 각등급 기준 (서강대 지역균형 등: "상위 N개 영역 각 M등급 이내")
+  //   - 등급합으로 환원 불가한 별도 조건 (예: 상위3개가 (1,1,7)이면 합9지만 7등급이 3 초과 → 미충족)
+  //   - 규칙_등급합이 함께 있으면 '각등급 AND 등급합' 복합 조건으로 처리
+  const eachG = parseFloat(rule['규칙_각등급']);
+  if(!isNaN(eachG)){
+    const topNe = String(rule['규칙_상위N']||'');
+    let pick;
+    if(topNe==='all'){
+      pick = [...avail];
+    } else {
+      const ne = parseInt(topNe) || 2;
+      pick = [...avail].sort((a,b)=>a.v-b.v).slice(0, ne);
+    }
+    const needCnt = topNe==='all' ? avail.length : (parseInt(topNe) || 2);
+    if(pick.length < needCnt) return { judged:false }; // 응시 영역 부족 → 판정 불가
+    const worst = Math.max(...pick.map(o=>o.v));            // 고른 영역 중 가장 나쁜 등급
+    let passEach = worst <= eachG;
+    let detail = `상위${pick.length}개 ${pick.map(o=>o.k+o.v.toFixed(0)).join('·')} (각 ${eachG}등급 이내 — 최저 ${worst.toFixed(0)}등급)`;
+    // 등급합 조건이 함께 있으면 AND
+    const gsumE = parseFloat(rule['규칙_등급합']);
+    if(!isNaN(gsumE)){
+      const sumE = Math.round(pick.reduce((a,o)=>a+o.v,0)*10)/10;
+      const passSum = sumE <= gsumE;
+      passEach = passEach && passSum;
+      detail += ` + 합 ${sumE} (기준 ${gsumE} 이내)`;
+    }
+    return { judged:true, pass: passEach, detail, eachGrade:eachG, worstGrade:worst };
+  }
+
+  // 등급합 기준
+  const gsum = parseFloat(rule['규칙_등급합']);
+  if(isNaN(gsum)) return { judged:false };
+  const topN = String(rule['규칙_상위N']||'');
+  let chosen=[];
+  let needCnt;
+  // ★ 2026-05-18 재수정: 데이터 입력 방식이 2가지로 나뉨 — 풀과목에 필수가 들어있는지로 구분
+  //   [패턴A] 풀과목에 필수 없음 (예: 풀과목=국,영,탐 / 필수=수)
+  //      → "국영탐 중 상위N개 + 수학" = 총 N+1개. (경북대 의예 "국영탐(2)중 상위2개+수학")
+  //   [패턴B] 풀과목에 필수 있음 (예: 풀과목=국,수,영,탐 / 필수=수)
+  //      → "풀과목 중 수학 포함 상위N개" = 총 N개. (계명대·부산대 "국수영탐 중 상위3개(수학포함)")
+  if(must){
+    const mv = subjVal[must];
+    if(mv==null) return { judged:false };
+    const poolHasMust = pool.indexOf(must) >= 0;
+    if(poolHasMust){
+      // 패턴B: 풀과목 중 수학 필수 포함, 총 topN개
+      const total = topN==='all' ? avail.length : (parseInt(topN)||1);
+      const others = avail.filter(o=>o.k!==must).sort((a,b)=>a.v-b.v);
+      const addN = Math.max(0, total - 1); // 수학 1개 제외 추가 개수
+      chosen = [{k:must,v:mv}, ...others.slice(0,addN)];
+      needCnt = total;
+    } else {
+      // 패턴A: 풀과목(수학 제외)에서 상위 topN개 + 수학 별도 추가 = 총 N+1개
+      const pick = parseInt(topN)||avail.length;  // 풀과목 중 고를 개수
+      const sorted = [...avail].sort((a,b)=>a.v-b.v).slice(0, topN==='all'?avail.length:pick);
+      chosen = [{k:must,v:mv}, ...sorted];
+      needCnt = (topN==='all'?avail.length:pick) + 1;  // +수학
+    }
+  } else if(topN==='all'){
+    chosen = avail;
+    needCnt = avail.length;
+  } else {
+    const n=parseInt(topN)||2;
+    chosen = [...avail].sort((a,b)=>a.v-b.v).slice(0,n);
+    needCnt = n;
+  }
+  const need = needCnt;
+  if(chosen.length < need) return { judged:false }; // 과목 부족 → 판정 불가
+  const sum = chosen.reduce((a,o)=>a+o.v,0);
+  const sumR = Math.round(sum*10)/10;
+  return {
+    judged:true, pass: sumR<=gsum,
+    detail:`${chosen.map(o=>o.k+o.v.toFixed(o.k==='탐'&&tamN==='2'?1:0)).join('+')} = 합 ${sumR} (기준 ${gsum} 이내)`,
+    sum:sumR, need:gsum
+  };
+}
+
+  function _suneungForCard(univ, dept, jeonhyeong){
+    if(!suneungMin || !suneungMin.length) return null;
+    const uN=_snNorm(univ), dN=_snNorm(dept);
+    const uKey=_uniKey(univ);
+    // 본체/캠퍼스 분리 ("건국대@글로컬" → body="건국대", campus="글로컬")
+    const _split = k => { const i=String(k||'').indexOf('@'); return i<0 ? {b:String(k||''),c:''} : {b:k.slice(0,i),c:k.slice(i+1)}; };
+    const us=_split(uKey);
+    const _univMatch = (rUniRaw) => {
+      const rs=_split(_uniKey(rUniRaw));
+      if(!us.b || !rs.b) return false;
+      // 본체 매칭 (동일 또는 3글자 이상 부분포함)
+      let bodyOk = us.b===rs.b;
+      if(!bodyOk){
+        const sh = us.b.length<=rs.b.length ? us.b : rs.b;
+        const lo = us.b.length<=rs.b.length ? rs.b : us.b;
+        bodyOk = sh.length>=3 && lo.includes(sh);
+      }
+      if(!bodyOk) return false;
+      // 캠퍼스: 양쪽 다 있으면 반드시 일치 / 한쪽이라도 비면 통과(유연)
+      if(us.c && rs.c) return us.c===rs.c || us.c.includes(rs.c) || rs.c.includes(us.c);
+      return true;
+    };
+    const rows = suneungMin.filter(r=> _univMatch(r['대학']));
+    if(!rows.length) return null;
+    const tg = /종합/.test(jeonhyeong)?'종합' : /교과/.test(jeonhyeong)?'교과' : /논술/.test(jeonhyeong)?'논술' : '';
+    // ★ 2026-05-18: 전형명 키워드 매칭 추가
+    //   - 기존 버그: 전형군(종합/교과/논술)만으로 매칭 → 같은 '종합'이라도
+    //     바람개비/의약학/기회균형 구분 못 함. 동점 시 첫 행(의약학 등 빡센 최저)을
+    //     엉뚱한 학과(바람개비 등)에 잘못 붙여 "4개 합 3 · 미달"처럼 오표시.
+    //   - 해결: 카드 전형명과 suneung_min 전형명의 핵심 키워드가 겹치면 큰 가산점(+6).
+    //           매칭 실패 동점 시 '최저 없는 행' 우선(잘못된 미달 표시보다 안전).
+    const jhN = _snNorm(jeonhyeong);
+    // suneung_min 전형명에서 비교용 핵심 키워드 추출 (괄호·'학생부'·'전형' 등 제거)
+    const _jhKeywords = nm => {
+      let s = _snNorm(nm);
+      s = s.replace(/학생부종합|학생부교과|학생부|전형|일반|[()（）ⅰⅱⅲ\d]/g,'');
+      // 2글자 이상 의미 토큰만 (예: 바람개비, 의약학, 지역균형, 기회균형, 추천, 활동우수)
+      return s.length>=2 ? s : '';
+    };
+    const scored = rows.map(r=>{
+      let sc=0;
+      const rg=String(r['전형군']||'');
+      if(tg && rg===tg) sc+=4; else if(rg==='전체') sc+=1;
+      if(/일반/.test(r['전형명']||'')) sc+=1;
+      // 전형명 핵심 키워드가 카드 전형 문자열에 포함되면 가산점
+      const kw=_jhKeywords(r['전형명']||'');
+      if(kw && jhN.includes(kw)) sc+=6;
+      // ★ 2026-05-18: 단과대학 학과 적용범위 판정 (B방식 — 학과 정확일치 최우선)
+      //   원칙: 카드 학과가 단과대학과 '정확히' 일치하면(의학과=의학과)
+      //   그게 포괄("전체")보다 무조건 우선. 전형명 매칭 실패해도 학과일치가 이김.
+      //   유형: ①전용("의예과","약학과") ②포괄("전체","전체(의예 제외)","인문·자연계열")
+      //         ③단과대세분("사범대학 수학교육과")
+      const danRaw = String(r['단과대학']||'').trim();
+      const danFlat = danRaw.replace(/\s/g,'');
+      const danN = _snNorm(danRaw);
+      const isCatchAll = /전체|외전체|그외|이외|나머지/.test(danFlat)
+        || /^인문계?[·,]?자연계?/.test(danFlat)
+        || /^인문[·,]자연/.test(danFlat)
+        || danFlat==='인문계열' || danFlat==='자연계열'
+        || danFlat==='인문·자연계열' || danFlat==='인문계열·자연계열';
+      let excluded = [];
+      const exM = danRaw.match(/[(（]([^)）]*?)(제외)[)）]/);
+      if(exM){
+        excluded = exM[1].split(/[·,및\/、\s]+/).map(s=>_snNorm(s)).filter(x=>x.length>=2);
+      }
+      const dExcluded = excluded.some(ex => dN && (ex.includes(dN)||dN.includes(ex)));
+      // 학과 일치 강도: 완전일치 > 포함관계
+      const exactDept = dN && dN.length>=2 && danN===dN;
+      const deptHit = dN && dN.length>=2 && danN &&
+                      (danN.includes(dN) || dN.includes(danN));
+      if(isCatchAll){
+        if(dExcluded) sc-=100;         // 포괄(~제외)인데 카드가 제외대상 → 배제
+        else sc+=2;                    // 포괄: 학과 무관 기본 적용
+      } else if(exactDept){
+        sc+=20;                        // ★ 학과 완전일치 → 최우선 (포괄·전형명 무관하게 승리)
+      } else if(deptHit){
+        sc+=8;                         // 학과 포함관계 일치
+      } else if(danN && danN!=='전체'){
+        sc-=100;                       // 전용 규칙인데 카드 학과 불일치 → 배제
+      }
+      const blob=_snNorm(danRaw+(r['비고']||''));
+      if(dN && dN.length>=2 && (blob.includes(dN)||dN.includes(blob))) sc+=1;
+      return {r,sc};
+    }).sort((a,b)=>{
+      if(b.sc!==a.sc) return b.sc-a.sc;
+      // 동점: 최저 '없음' 행을 먼저 (오매칭으로 인한 잘못된 미달 경고 방지)
+      const an=String(a.r['최저적용'])==='없음'?0:1;
+      const bn=String(b.r['최저적용'])==='없음'?0:1;
+      return an-bn;
+    });
+    const best=scored[0];
+    if(!best || best.sc<=0) return null;
+    const r=best.r;
+    if(String(r['최저적용'])==='없음') return { none:true };
+    const ev = _evalSuneungRule(r, _mockG);
+
+    // ★ 2026-05-18: 라벨 생성을 숫자 파싱 기반으로 통일
+    //   - 기존 버그: 규칙_상위N 이 "3.0"(소수점)이면 /^\d+$/ 불일치 → "N개" 누락
+    //               ("2"는 붙고 "3.0"은 안 붙어 충족/미달과 무관하게 표기 들쭉날쭉)
+    //   - 기존 버그: 등급합을 최저기준_설명 텍스트 정규식으로 뽑아 8건 미스
+    //   - 이제 규칙 컬럼만 parseInt/parseFloat 로 일관 처리 + 각등급 라벨 지원
+    const single = String(r['규칙_단일등급']||'').trim();
+    const eachG  = parseFloat(r['규칙_각등급']);
+    const gsumN  = parseFloat(r['규칙_등급합']);
+    const must   = String(r['규칙_필수']||'').trim();
+    const topRaw = String(r['규칙_상위N']||'').trim();
+    const poolN  = String(r['규칙_풀과목']||'').split(',').filter(Boolean).length;
+
+    // 선택 영역 개수 N (상위N개 / all / 필수+상위)
+    let pickN = 0;
+    if(topRaw === 'all') pickN = poolN;
+    else { const t = parseInt(topRaw); if(!isNaN(t)) pickN = t; }
+    // ★ 2026-05-18 재수정: 풀과목에 필수과목이 없으면(패턴A: 경북대 "국영탐중2+수학")
+    //   상위N개에 수학이 별도 추가되므로 표시 개수는 +1 (총 N+1개)
+    const _poolArr = String(r['규칙_풀과목']||'').split(',').map(s=>s.trim()).filter(Boolean);
+    if(must && _poolArr.indexOf(must) < 0 && pickN > 0) pickN += 1;
+    const cntTxt = pickN > 0 ? (pickN + '개 ') : '';
+
+    const _n = x => (x % 1 === 0 ? String(x|0) : String(x)); // 3.0→"3", 2.5→"2.5"
+    let shortLabel;
+    if(single){
+      shortLabel = '상위1개 ' + _n(parseFloat(single)) + '등급';
+    } else if(!isNaN(eachG)){
+      // 서강대 지역균형류: "상위N개 각 M등급" (+ 등급합 복합 시 함께 표기)
+      shortLabel = (cntTxt || '상위 ') + '각 ' + _n(eachG) + '등급'
+                 + (!isNaN(gsumN) ? (' · 합 ' + _n(gsumN)) : '');
+    } else if(!isNaN(gsumN)){
+      shortLabel = cntTxt + '합 ' + _n(gsumN);
+    } else {
+      shortLabel = '기준확인';
+    }
+
+    return {
+      none:false,
+      label: shortLabel,
+      desc: r['최저기준_설명']||'',
+      judged: ev.judged,
+      pass: ev.pass,
+      mySum: ev.sum!=null ? ev.sum : null,
+      worstGrade: ev.worstGrade!=null ? ev.worstGrade : null, // 각등급 케이스: 고른 영역 중 최저 등급
+      detail: ev.detail||''
+    };
+  }
+
+function _refreshSuneungContext(){
+  suneungMin = (typeof SUNEUNG_MIN!=='undefined' && SUNEUNG_MIN) ? SUNEUNG_MIN : [];
+  _mockG = (typeof _mockGrades==='function') ? _mockGrades() : null;
+}
+</script>
+
+
+</body>
+</html>
