@@ -8481,6 +8481,7 @@ function renderMajorAdmissions() {
       + (r['지역'] ? '<span style="font-size:10px;color:#94a3b8;">' + escapeHtml(r['지역']) + '</span>' : '')
       + admHtml
       + '</div>'
+      + _gmapInfoHtml(r['대학'], r['전형'], r['세부전형명'], currentStu && currentStu.hak, r['모집단위'])
       + '</div>'
       + '<div style="flex-shrink:0;text-align:right;min-width:72px;">'
       + (cut50 ? '<div style="font-size:22px;font-weight:900;color:#1e293b;">' + cut50.toFixed(2) + ' <span style="font-size:9px;color:#94a3b8;font-weight:400;">' + cutYear + ' 50컷</span></div>' : (admAvg ? '<div style="font-size:15px;font-weight:700;color:#64748b;">' + admAvg.toFixed(2) + ' <span style="font-size:9px;color:#94a3b8;">합격평균</span></div>' : ''))
@@ -8733,6 +8734,48 @@ function gmapMatchForCard(univ, admType, admSubType, cardDept) {
     }
   }
   return result;
+}
+
+// G-map 정보 → 카드용 HTML (1·2학년만)
+function _gmapInfoHtml(univ, jeonhyeong, sebu, studentHak, dept) {
+  // 1·2학년만 (3학년은 2027 입시라 G-map 2028 적용 안 함)
+  const gradeNum = parseInt(String(studentHak||'')[0]);
+  if (gradeNum !== 1 && gradeNum !== 2) return '';
+  // 데이터 안 왔으면 표시 안 함
+  if (!gmapJeonhyeong || !gmapJeonhyeong.length) return '';
+
+  const m = gmapMatchForCard(univ, jeonhyeong, sebu, dept);
+  if (!m.매칭됨) {
+    return '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;align-items:center;">'
+      + '<span style="font-size:10px;background:#f3f4f6;color:#9ca3af;padding:1px 6px;border-radius:4px;">2028 전형 정보 미수집</span>'
+      + '</div>';
+  }
+  let line = '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;align-items:center;">';
+  if (m.반영비율) {
+    line += '<span style="font-size:10px;background:#eef2ff;color:#4338ca;padding:1px 6px;border-radius:4px;font-weight:600;" title="2028 전형요소 반영비율">'
+      + escapeHtml(m.반영비율) + '</span>';
+  }
+  if (m.졸업생지원) {
+    const isOk = m.졸업생지원 === '가능';
+    const bg = isOk ? '#f0fdf4' : '#fef3c7';
+    const fg = isOk ? '#15803d' : '#92400e';
+    line += '<span style="font-size:10px;background:' + bg + ';color:' + fg + ';padding:1px 6px;border-radius:4px;font-weight:600;" title="2028부터 졸업생 지원 ' + m.졸업생지원 + '">'
+      + '졸업생 ' + m.졸업생지원 + '</span>';
+  }
+  line += '</div>';
+
+  if (m.변동사항 && m.변동사항.length) {
+    const items = m.변동사항.slice(0, 4).map(c =>
+      '<div style="font-size:10px;line-height:1.4;"><span style="font-weight:700;color:#92400e;">' + escapeHtml(c.구분) + ':</span> '
+      + '<span style="color:#78350f;">' + escapeHtml(c.변화.length > 80 ? c.변화.substring(0, 80) + '…' : c.변화) + '</span></div>'
+    ).join('');
+    const more = m.변동사항.length > 4 ? '<div style="font-size:9px;color:#a16207;margin-top:2px;">…외 ' + (m.변동사항.length - 4) + '건</div>' : '';
+    line += '<div style="background:#fef9c3;border-left:3px solid #ca8a04;padding:5px 8px;margin-top:5px;border-radius:4px;">'
+      + '<div style="font-size:10px;font-weight:700;color:#854d0e;margin-bottom:3px;">📌 2028 변동사항</div>'
+      + items + more
+      + '</div>';
+  }
+  return line;
 }
 
 // ── 우리학교 합불 자료 팝업 ──
