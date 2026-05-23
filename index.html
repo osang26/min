@@ -1623,7 +1623,7 @@ function renderList(){
       currentStu = students.find(s=>String(s.hak)===hak);
       // currentTab은 유지 — 탭을 바꾸지 않음
       openAccordions.clear();
-      includeMidExam = false;  // ★ 2026-05-23: 학생 변경 시 중간고사 토글 초기화
+      // ★ 2026-05-23 (수정): includeMidExam은 학생 간 유지 (선생님 요청)
       renderList();
       renderMain();
     };
@@ -7098,7 +7098,7 @@ function selectMobileStudent(){
   currentStu = students.find(s => String(s.hak) === hak);
   if(currentStu){
     openAccordions.clear();
-    includeMidExam = false;  // ★ 2026-05-23: 학생 변경 시 중간고사 토글 초기화
+    // ★ 2026-05-23 (수정): includeMidExam은 학생 간 유지 (선생님 요청)
     renderMain();
   }
 }
