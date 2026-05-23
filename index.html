@@ -1148,21 +1148,59 @@ const SUBJECT_FILTER_MAP = {
 // ============================================================
 function getStudentGrades(stu) {
   const keys = [String(stu.hak), String(stu.g3_hak||''), String(stu.g2_hak||''), String(stu.g1_hak||'')];
+  let baseData = null;
   for(const k of keys){
     if(!k) continue;
     const d = grades[k];
     if(!d) continue;
     // grades 키 안에 학기 데이터가 있는 구조: { grades: { '1-1':{...} } }
-    if(d.grades && Object.keys(d.grades).length > 0) return d;
+    if(d.grades && Object.keys(d.grades).length > 0) { baseData = d; break; }
     // 최상위에 바로 학기 키가 있는 구조: { '1-1':{...}, '2-1':{...} }
     const semKeys = ['1-1','1-2','2-1','2-2','3-1','3-2'].filter(s => d[s]);
     if(semKeys.length > 0){
       const normalized = { ...d, grades: {} };
       semKeys.forEach(s => { normalized.grades[s] = d[s]; });
-      return normalized;
+      baseData = normalized;
+      break;
     }
   }
-  return null;
+  // ★ 2026-05-23: 중간고사 포함 토글 켜져 있으면 중간고사를 가상 학기로 추가
+  if (includeMidExam) {
+    const mid = _midExamForStudent(stu);
+    if (mid) {
+      const merged = baseData ? { ...baseData, grades: { ...baseData.grades } } : { grades: {} };
+      merged.grades[mid.semKey] = mid.semData;
+      return merged;
+    }
+  }
+  return baseData;
+}
+
+// ★ 2026-05-23: 중간고사 데이터를 grades 학기 형식으로 변환
+function _midExamForStudent(stu) {
+  if (!stu || !midExamDB) return null;
+  const keys = [String(stu.hak||''), String(stu.g3_hak||''), String(stu.g2_hak||''), String(stu.g1_hak||'')];
+  let mid = null;
+  for (const k of keys) {
+    if (k && midExamDB[k]) { mid = midExamDB[k]; break; }
+  }
+  if (!mid || !mid.과목별 || !mid.과목별.length) return null;
+  const grade = mid.학년 || parseInt(String(stu.hak||'')[0]) || 1;
+  const semKey = grade + '-1중간';
+  const subjects = mid.과목별.map(s => ({
+    교과: s.카테고리 || '기타',
+    과목: s.과목,
+    등급: s.등급,
+    학점: s.학점,
+    석차: s.석차,
+    수강자수: s.수강자수,
+    원점수: s.점수,
+    _isMid: true
+  }));
+  return {
+    semKey: semKey,
+    semData: { subjects: subjects, _isMid: true, _label: '중간고사' }
+  };
 }
 
 // 교과군 판별 함수 — 교과명(교과 컬럼값) 기준 정확 매칭
@@ -1199,7 +1237,7 @@ const SEWTUK_CATEGORIES = ['전체 과목','국어','영어','수학','사회(�
 const SEWTUK_GRADES = ['전체 학년','1학년','2학년','3학년'];
 const SEWTUK_SEMESTERS = ['전체 학기','1학기','2학기'];
 
-let students=[], mock={}, grades={}, sewtuk={}, changche={}, haengbal={}, evalData={}, admissionsDB=[], cutoffDB=[], referencesList=[], cutoffIndex={}, kbUniv=[], kbTopic=[], alumniKb=[], suneungDB=[], suneungSubject=[], suneungBonus=[], successCases=[], successCasesEtc=[], suneungMin=[], currentStu=null, currentTab='모의고사', currentMode='등급', currentGradeFilter='전체', chartInst=null;
+let students=[], mock={}, grades={}, sewtuk={}, changche={}, haengbal={}, evalData={}, admissionsDB=[], cutoffDB=[], referencesList=[], cutoffIndex={}, kbUniv=[], kbTopic=[], alumniKb=[], suneungDB=[], suneungSubject=[], suneungBonus=[], successCases=[], successCasesEtc=[], suneungMin=[], midExamDB={}, gmapJeonhyeong=[], gmapGyogwa=[], gmapByungdong=[], currentStu=null, currentTab='모의고사', currentMode='등급', currentGradeFilter='전체', chartInst=null;
 let majorAnalysisCache = {}; // (deprecated) 구 버전 호환용
 let applyHistoryDB = {};    // hak → [{id,univ,dept,type,result,date}] — apply_history 시트
 let majorAnalysisDB = {};   // hak → {dept:{전공적합성,...}}            — major_analysis 시트
@@ -1210,6 +1248,7 @@ let sewtukGrade='전체 학년', sewtukSem='전체 학기', sewtukCat='전체 �
 let openAccordions = new Set();
 let gradeScale = 5; // 5 or 9 (1·2학년 전용 9등급 환산 토글)
 let currentGradeIs9 = false; // 현재 학생이 9등급제인지 — 렌더링 전용 플래그
+let includeMidExam = false; // ★ 2026-05-23: 중간고사 포함 토글 (기본 OFF)
 
 // 학생이 9등급제인지 판별 — 입학년도 기준
 // 현재 3학년(2024 입학): 전 학기 9등급제
@@ -1516,18 +1555,26 @@ async function init(password){
   currentPassword = password;
   try{
     // 전체 병렬 로드 (속도 최적화)
-    const [s, m, g, snMin, adm] = await Promise.all([
-      apiGet({ action: 'getStudents',   password }).catch(()=>null),
-      apiGet({ action: 'getMockExam',   password }).catch(()=>null),
-      apiGet({ action: 'getGrades',     password }).catch(()=>null),
-      apiGet({ action: 'getSuneungMin', password }).catch(()=>null),
-      apiGet({ action: 'getAdmissions', password }).catch(()=>null),
+    const [s, m, g, snMin, adm, midEx, gj, gg, gb] = await Promise.all([
+      apiGet({ action: 'getStudents',          password }).catch(()=>null),
+      apiGet({ action: 'getMockExam',          password }).catch(()=>null),
+      apiGet({ action: 'getGrades',            password }).catch(()=>null),
+      apiGet({ action: 'getSuneungMin',        password }).catch(()=>null),
+      apiGet({ action: 'getAdmissionsSummary', password }).catch(()=>null),  // ★ 집계형으로 변경
+      apiGet({ action: 'getMidExam',           password }).catch(()=>null),  // ★ 신규
+      apiGet({ action: 'getGmapJeonhyeong',    password }).catch(()=>null),  // ★ 신규
+      apiGet({ action: 'getGmapGyogwa',        password }).catch(()=>null),  // ★ 신규
+      apiGet({ action: 'getGmapByungdong',     password }).catch(()=>null),  // ★ 신규
     ]);
     students = s || [];
     mock     = m  || {};
     if(g)   grades     = g;
     if(snMin) suneungMin = Array.isArray(snMin) ? snMin : [];
-    if(adm) admissionsDB = Array.isArray(adm) ? adm : [];  // ★ 우리학교 합불자료 일괄 로드(기존 시스템과 동일)
+    if(adm) admissionsDB = Array.isArray(adm) ? adm : [];  // ★ 집계형 데이터 (합격건수 등 포함)
+    if(midEx && typeof midEx === 'object') midExamDB = midEx;
+    if(gj) gmapJeonhyeong = Array.isArray(gj) ? gj : [];
+    if(gg) gmapGyogwa = Array.isArray(gg) ? gg : [];
+    if(gb) gmapByungdong = Array.isArray(gb) ? gb : [];
     // ★ 2026-05-19: 기존 상담시스템과 동일 — cutoff 전체를 백그라운드 1회 로드.
     //   학생 클릭 시 학생별 서버요청(5초) 없이 메모리 cutoffDB에서 즉시 필터.
     setTimeout(() => {
@@ -1576,6 +1623,7 @@ function renderList(){
       currentStu = students.find(s=>String(s.hak)===hak);
       // currentTab은 유지 — 탭을 바꾸지 않음
       openAccordions.clear();
+      includeMidExam = false;  // ★ 2026-05-23: 학생 변경 시 중간고사 토글 초기화
       renderList();
       renderMain();
     };
@@ -1788,12 +1836,19 @@ function renderGrades(el){
   const grade = parseInt(s.grade) || parseInt(String(s.hak)[0]);
   // 입학년도 기준 등급제 판별 (isStudent9Grade 헬퍼 사용)
   currentGradeIs9 = isStudent9Grade(s);
+  // ★ 2026-05-23: 중간고사 있는지 미리 확인
+  const hasMidEx = midExamDB && (midExamDB[String(s.hak)] || midExamDB[String(s.g3_hak||'')] || midExamDB[String(s.g2_hak||'')] || midExamDB[String(s.g1_hak||'')]);
   let data = getStudentGrades(s);
+  // 1·2학년은 grades 데이터가 없을 수 있음 — 중간고사 있으면 자동 토글 ON
+  if((!data || !data.grades || Object.keys(data.grades).length === 0) && hasMidEx && !includeMidExam) {
+    includeMidExam = true;
+    data = getStudentGrades(s);
+  }
   if(!data){
     el.innerHTML = `<div class="no-data">📋 내신 데이터가 없습니다</div>`;
     return;
   }
-  if(!data.grades){
+  if(!data.grades || Object.keys(data.grades).length === 0){
     el.innerHTML = `<div class="no-data">📋 내신 데이터가 없습니다</div>`;
     return;
   }
@@ -1804,9 +1859,11 @@ function renderGrades(el){
   // 9등급제 학생은 이미 9등급 데이터 — 환산 버튼 불필요
   const scaleBtn = currentGradeIs9 ? '' : `<button class="toggle-btn scale-btn ${gradeScale===9?'active':''}" data-scale="toggle">9등급 환산</button>`;
   const rankBtn  = `<button class="toggle-btn rank-btn ${showRank?'active':''}" data-rank="toggle">🏅 학교 등수</button>`;
+  // ★ 2026-05-23: 중간고사 포함 토글
+  const midExBtn = hasMidEx ? `<button class="toggle-btn ${includeMidExam?'active':''}" data-midex="toggle" style="background:${includeMidExam?'#f59e0b':'#fff'};color:${includeMidExam?'#fff':'#92400e'};border-color:#f59e0b;">📝 중간고사 포함</button>` : '';
   const semesters = Object.keys(data.grades).sort();
 
-  let html = `<div style="margin-bottom:14px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;"><span class="filter-label">📚 교과:</span><div class="toggle-group" style="margin:0;">${subjectBtns}${scaleBtn}${rankBtn}</div></div>`;
+  let html = `<div style="margin-bottom:14px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;"><span class="filter-label">📚 교과:</span><div class="toggle-group" style="margin:0;">${subjectBtns}${scaleBtn}${rankBtn}${midExBtn}</div></div>`;
 
   if(gradeScale === 9 && !currentGradeIs9){
     html += `<div class="est-info">
@@ -1834,6 +1891,7 @@ function renderGrades(el){
   }; });
   el.querySelectorAll('[data-scale]').forEach(b=>{ b.onclick = ()=>{ gradeScale = gradeScale===5 ? 9 : 5; renderTab(); }; });
   el.querySelectorAll('[data-rank]').forEach(b=>{ b.onclick = ()=>{ showRank = !showRank; renderTab(); }; });
+  el.querySelectorAll('[data-midex]').forEach(b=>{ b.onclick = ()=>{ includeMidExam = !includeMidExam; renderTab(); }; });
 
   // 학기별 추이 차트 그리기
   drawGradeChart(data, semesters);
@@ -1944,7 +2002,13 @@ function drawGradeChart(data, semesters){
   const xPos = semesters.map((_, i) => (2 * i + 1) / (2 * n));
   // 9등급 학생은 라벨에 등급제 표시 없이 깔끔하게, 5등급 학생만 [5등급] 안내
   const is9 = isStudent9Grade(currentStu);
-  const semLabels = semesters.map(sem => `${sem.split('-')[0]}학년\n${sem.split('-')[1]}학기`);
+  const semLabels = semesters.map(sem => {
+    if (sem.indexOf('중간') >= 0) {
+      const m = sem.match(/^(\d+)-(\d+)/);
+      return m ? `${m[1]}학년\n${m[2]}-1 중간` : sem;
+    }
+    return `${sem.split('-')[0]}학년\n${sem.split('-')[1]}학기`;
+  });
 
   // ★ 버그2 수정: null 제거 → 일부 학기만 있어도 해당 포인트만 정상 표시
   function toXY(avgs){
@@ -2079,7 +2143,14 @@ function drawGradeChart(data, semesters){
 function renderSemesterBlock(sem, semData){
   const summary = semData.summary || {};
   const subjects = semData.subjects || [];
-  const semLabel = `${sem.split('-')[0]}학년 ${sem.split('-')[1]}학기`;
+  // ★ 2026-05-23: 중간고사 학기 라벨 처리
+  let semLabel;
+  if (sem.indexOf('중간') >= 0) {
+    const m = sem.match(/^(\d+)-(\d+)/);
+    semLabel = m ? `${m[1]}학년 ${m[2]}학기 중간고사` : sem;
+  } else {
+    semLabel = `${sem.split('-')[0]}학년 ${sem.split('-')[1]}학기`;
+  }
   const semIs9 = isSem9Grade(currentStu, semData);
   let semCredit=0, semWeighted=0;
   subjects.forEach(s=>{
@@ -2111,7 +2182,9 @@ function renderSemesterBlock(sem, semData){
   }).filter(Boolean);
 
   // 데스크탑: 테이블
-  const showRankCol = semIs9 || gradeScale===9;
+  // ★ 2026-05-23: 중간고사 학기는 석차 표시 금지 (수강자수만 표시)
+  const isMidSem = semData && semData._isMid;
+  const showRankCol = (semIs9 || gradeScale===9) && !isMidSem;
   const rows = subjectData.map(({s, g, estTag})=>{
     const gradeClass = g!=null ? 'grade-'+g : '';
     const rankCell = (showRankCol && s.석차 && s.수강자수)
@@ -2601,7 +2674,7 @@ async function fetchAdmissionCases(univ, dept) {
     if (!Array.isArray(data) || data.length === 0) {
       const timeout = new Promise((_,rej) => setTimeout(() => rej(new Error('admissions timeout')), 15000));
       data = await Promise.race([
-        apiGet({ action: 'getAdmissions', password: currentPassword }),
+        apiGet({ action: 'getAdmissionsSummary', password: currentPassword }),
         timeout
       ]);
       if (Array.isArray(data)) admissionsDB = data;  // 받은 김에 캐싱
@@ -7023,7 +7096,11 @@ function selectMobileStudent(){
   const hak = document.getElementById('mStudentSelect')?.value;
   if(!hak){ currentStu = null; renderMain(); return; }
   currentStu = students.find(s => String(s.hak) === hak);
-  if(currentStu){ openAccordions.clear(); renderMain(); }
+  if(currentStu){
+    openAccordions.clear();
+    includeMidExam = false;  // ★ 2026-05-23: 학생 변경 시 중간고사 토글 초기화
+    renderMain();
+  }
 }
 
 // 화면 회전/크기 변경 대응
@@ -8388,8 +8465,10 @@ function renderMajorAdmissions() {
       }
     }
 
+    // ★ 2026-05-23: HTML 큰따옴표 안에 JSON.stringify(큰따옴표)가 들어가 onclick 파싱이 깨지던 버그 수정
+    const _escForJs = s => String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     const admHtml = r.adm
-      ? '<span onclick="showAdmissionsPopup(' + JSON.stringify(r['대학']) + ',' + JSON.stringify(r['모집단위']) + ')" style="font-size:10px;background:#f0fdf4;color:#15803d;padding:1px 6px;border-radius:4px;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;">🟢 우리학교 합격 ' + parseInt(r.adm['합격건수']||0) + '건 · ' + parseFloat(r.adm['합격평균등급']).toFixed(2) + '등급 ▾</span>'
+      ? "<span onclick=\"showAdmissionsPopup('" + _escForJs(r['대학']) + "','" + _escForJs(r['모집단위']) + "')\" style=\"font-size:10px;background:#f0fdf4;color:#15803d;padding:1px 6px;border-radius:4px;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px;\">🟢 우리학교 합격 " + parseInt(r.adm['합격건수']||0) + '건 · ' + parseFloat(r.adm['합격평균등급']).toFixed(2) + '등급 ▾</span>'
       : '';
 
     return '<div style="display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid #f8fafc;">'
@@ -8470,6 +8549,192 @@ function renderMajorAdmissions() {
 
 
 
+
+
+// ============================================================
+// ★ G-map 2028 매칭 엔진 v2 (2026-05-23)
+//   상담시스템에서 이식. 학과 분리 데이터(적용학과 컬럼) 기반 정밀 매칭
+// ============================================================
+function _gmap_deepNorm(s) {
+  s = String(s || '').trim();
+  s = s.replace(/Ⅰ/g,'I').replace(/Ⅱ/g,'II').replace(/Ⅲ/g,'III')
+       .replace(/Ⅳ/g,'IV').replace(/Ⅴ/g,'V').replace(/Ⅵ/g,'VI');
+  s = s.replace(/·/g,'').replace(/\s/g,'').replace(/\//g,'');
+  return s.toLowerCase();
+}
+function _gmap_baseName(s) {
+  return String(s||'').replace(/\([^)]*\)/g, '').trim();
+}
+function _gmap_normalizeJh(admType, admSubType) {
+  const s = String(admSubType || '').trim();
+  const typeMap = {
+    '학생부위주(교과)':'교과','학생부위주(종합)':'종합',
+    '논술위주':'논술','논술':'논술',
+    '실기위주':'실기','실기/실적위주':'실기','실기/실적':'실기'
+  };
+  const t = typeMap[String(admType||'').trim()] || String(admType||'').trim();
+  let inner = null, m;
+  m = s.match(/(?:학생부교과|학생부종합|논술|실기|교과|종합)[(\[]([^)\]]+)[)\]]/);
+  if (m) inner = m[1].trim();
+  if (!inner) { m = s.match(/실기\/?실적(?:위주)?[(\[]([^)\]]+)[)\]]/); if (m) inner = m[1].trim(); }
+  if (!inner) { m = s.match(/학생부위주\([^)]+\)\s*-\s*(.+)/); if (m) inner = m[1].trim(); }
+  if (!inner) { m = s.match(/^\[[^\]]+\](.+)/); if (m) inner = m[1].trim(); }
+  if (!inner) { m = s.match(/\[([^\]]+)\]\s*$/); if (m) inner = m[1].trim(); }
+  if (!inner) { m = s.match(/^\(\s*(?:학생부교과|학생부종합|논술|실기)\s*\)(.+)/); if (m) inner = m[1].trim(); }
+  if (!inner) inner = s.replace(/^(학생부교과|학생부종합|논술|실기|교과|종합)/,'').trim() || s;
+  inner = inner.replace(/전형\s*$/,'').trim().replace(/\s*특별\s*$/,'').trim();
+  inner = inner.replace(/^[()\[\]\/\s]+|[()\[\]\/\s]+$/g,'');
+  return { type: t, inner: inner };
+}
+const _GMAP_SYNONYMS = {
+  '교과성적우수자':['교과우수자','일반교과','교과1','교과','일반','학교장추천I'],
+  '교과성적우수인재':['교과우수인재','일반교과'],
+  '학생부우수자':['교과우수자','교과우수','일반','학업성적우수자'],
+  '학생부교과':['교과우수','교과우수자','일반교과','일반','학업성적우수자'],
+  '학생부종합':['서류','일반','면접','학업형','면접형','서류형'],
+  '학교장추천':['추천인재','학교추천','학교장추천I','학교장추천II','추천형'],
+  '학교생활우수자':['서울텍인재','학업성적우수자','학교생활우수','학교생활우수인재'],
+  '국민프런티어':['국민프론티어'],
+  '농어촌학생':['농어촌','농어촌인재','농어촌학생출신자','농·어촌학생','농어천학생'],
+  '면접':['면접','면접형','면접지역','교과2','교과면접'],
+  '일반학생':['일반','일반학생','교과우수자','학업형'],
+  '일반':['일반학생','학업형','일반교과','서류','교과우수자','교과중심','교과'],
+  '예체능':['예·체능','예체능']
+};
+const _GMAP_UNIV_ALIAS = {
+  '영남대|잠재능력우수자':'일반학생','경북대|일반학생':'교과우수자',
+  '금오공대|지역인재':'KIT인재','경운대|면접':'교과2','경운대|지역인재':'지역교과',
+  '동국대|교과':'학교장추천인재','한남대|일반':'실기','한양대|일반':'학업형',
+  '한양대(ERICA)|일반':'서류형','중앙대|다빈치형인재':'탐구하는학종',
+  '중앙대|CAU융합형인재':'모두의학종','대구가톨릭대|DCU인재':'종합(일반학과)',
+  '성균관대|계열모집':'성균인재','성균관대|학과모집':'성균인재',
+  '성균관대|학과모집(글로벌리더)':'성균인재','경국대|ANU미래인재':'바른인재',
+  '경국대|ANU인재':'바른인재','서울과기대|학교생활우수자':'서울텍인재',
+  '숙명여대|숙명인재(면접형)':'숙명인재','숙명여대|숙명인재(서류형)':'숙명인재',
+  '국민대|교과성적우수자':'학교장추천I','대구대|일반':'교과'
+};
+function _gmap_fuzzy(a, b) {
+  const aBase = _gmap_deepNorm(_gmap_baseName(a));
+  const bBase = _gmap_deepNorm(_gmap_baseName(b));
+  if (!aBase || !bBase) return false;
+  if (aBase === bBase) return true;
+  if (aBase.indexOf(bBase) >= 0 || bBase.indexOf(aBase) >= 0) return true;
+  return false;
+}
+function _gmap_deptCardMatch(cardDept, gmapDeptStr) {
+  if (!gmapDeptStr) return false;
+  if (!cardDept) return false;
+  const d = String(cardDept).trim();
+  if (!d) return false;
+  function stem(x) {
+    let s = x;
+    if (/[과부학대]$/.test(s)) s = s.slice(0, -1);
+    return s.trim();
+  }
+  const dStem = stem(d);
+  const kws = String(gmapDeptStr).split(',').map(x=>x.trim()).filter(x=>x);
+  for (const kw of kws) {
+    if (kw === d) return true;
+    if (kw.length >= 2 && d.length >= 2) {
+      if (d.indexOf(kw) >= 0 || kw.indexOf(d) >= 0) return true;
+      const kwStem = stem(kw);
+      if (dStem.length >= 2 && kwStem.length >= 2) {
+        if (dStem === kwStem) return true;
+        if (dStem.indexOf(kwStem) >= 0 || kwStem.indexOf(dStem) >= 0) return true;
+      }
+    }
+  }
+  return false;
+}
+function gmapMatchForCard(univ, admType, admSubType, cardDept) {
+  const result = { 매칭됨:false, 반영비율:null, 졸업생지원:null, 변동사항:[], 매칭전형명:null, 학과한정:false };
+  if (!univ || !admSubType) return result;
+  if (!gmapJeonhyeong || !gmapJeonhyeong.length) return result;
+  const norm = _gmap_normalizeJh(admType, admSubType);
+  const t = norm.type, inner = norm.inner;
+  const candidates = gmapJeonhyeong.filter(r =>
+    String(r['대학교']||r['대학']||'').trim() === univ &&
+    String(r['모집시기']||'').trim() === '수시' &&
+    String(r['전형유형']||'').trim() === t
+  );
+  if (!candidates.length) return result;
+
+  const innerMatches = [];
+  const aliasKey = univ + '|' + inner;
+  if (_GMAP_UNIV_ALIAS[aliasKey]) {
+    const target = _GMAP_UNIV_ALIAS[aliasKey];
+    for (const r of candidates) {
+      if (_gmap_fuzzy(target, r['전형명'])) innerMatches.push(r);
+    }
+  }
+  if (!innerMatches.length) {
+    for (const r of candidates) {
+      const cj = String(r['전형명']||'').replace(/전형\s*$/,'').trim();
+      if (_gmap_fuzzy(inner, cj)) innerMatches.push(r);
+    }
+  }
+  if (!innerMatches.length && _GMAP_SYNONYMS[inner]) {
+    for (const syn of _GMAP_SYNONYMS[inner]) {
+      for (const r of candidates) {
+        const cj = String(r['전형명']||'').replace(/전형\s*$/,'').trim();
+        if (_gmap_fuzzy(syn, cj)) {
+          if (innerMatches.indexOf(r) < 0) innerMatches.push(r);
+        }
+      }
+      if (innerMatches.length) break;
+    }
+  }
+  if (!innerMatches.length) return result;
+
+  let matchedRow = null;
+  if (cardDept) {
+    matchedRow = innerMatches.find(r => _gmap_deptCardMatch(cardDept, r['적용학과']));
+    if (matchedRow) result.학과한정 = true;
+  }
+  if (!matchedRow) {
+    matchedRow = innerMatches.find(r => !String(r['적용학과']||'').trim());
+  }
+  if (!matchedRow) matchedRow = innerMatches[0];
+
+  result.매칭됨 = true;
+  result.반영비율 = String(matchedRow['전형요소반영비율']||'').trim() || null;
+  result.매칭전형명 = String(matchedRow['전형명']||'').trim();
+
+  if (gmapGyogwa && gmapGyogwa.length) {
+    const gyogwaCands = gmapGyogwa.filter(r =>
+      String(r['대학교']||r['대학']||'').trim() === univ &&
+      _gmap_fuzzy(result.매칭전형명, r['전형명'])
+    );
+    let gyogwa = null;
+    if (gyogwaCands.length === 1) gyogwa = gyogwaCands[0];
+    else if (gyogwaCands.length > 1) {
+      if (cardDept) gyogwa = gyogwaCands.find(r => _gmap_deptCardMatch(cardDept, r['적용학과']));
+      if (!gyogwa) gyogwa = gyogwaCands.find(r => !String(r['적용학과']||'').trim());
+      if (!gyogwa) gyogwa = gyogwaCands[0];
+    }
+    if (gyogwa) {
+      const j = String(gyogwa['졸업생지원']||'').trim();
+      if (j === '1') result.졸업생지원 = '가능';
+      else if (j === '0') result.졸업생지원 = '불가';
+    }
+  }
+
+  if (gmapByungdong && gmapByungdong.length) {
+    const changes = gmapByungdong.filter(r =>
+      String(r['대학교']||r['대학']||'').trim() === univ &&
+      (String(r['시기']||'').trim()==='수시' || String(r['시기']||'').trim()==='공통') &&
+      (String(r['전형']||'').trim()===t || String(r['전형']||'').trim()==='공통' || String(r['전형']||'').trim()==='교과종합')
+    );
+    if (changes.length) {
+      result.변동사항 = changes.map(r => ({
+        구분: String(r['구분']||'').trim(),
+        변화: String(r['2028변화사항']||'').trim()
+      })).filter(x => x.변화);
+    }
+  }
+  return result;
+}
+
 // ── 우리학교 합불 자료 팝업 ──
 function showAdmissionsPopup(univName, deptName) {
   const existing = document.getElementById('admPopup');
@@ -8493,16 +8758,23 @@ function showAdmissionsPopup(univName, deptName) {
   // ── 팝업 전체 DOM 빌드 ──
   const popup = document.createElement('div');
   popup.id = 'admPopup';
+  // ★ 2026-05-23: 반응형 — 모바일은 바텀시트, PC는 가운데 정렬
+  const isMobileScreen = window.innerWidth < 600;
   Object.assign(popup.style, {
     position:'fixed', top:'0', left:'0', right:'0', bottom:'0',
     background:'rgba(0,0,0,.5)', zIndex:'9999',
-    display:'flex', alignItems:'flex-end', justifyContent:'center'
+    display:'flex',
+    alignItems: isMobileScreen ? 'flex-end' : 'center',
+    justifyContent:'center',
+    padding: isMobileScreen ? '0' : '20px'
   });
 
   const sheet = document.createElement('div');
   Object.assign(sheet.style, {
-    background:'#fff', borderRadius:'16px 16px 0 0',
-    width:'100%', maxWidth:'600px', maxHeight:'80vh', overflowY:'auto'
+    background:'#fff',
+    borderRadius: isMobileScreen ? '16px 16px 0 0' : '16px',
+    width:'100%', maxWidth:'600px', maxHeight:'80vh', overflowY:'auto',
+    boxShadow: isMobileScreen ? 'none' : '0 20px 60px rgba(0,0,0,.25)'
   });
 
   // 헤더
